@@ -10,28 +10,27 @@ const {
     setDoc, 
     getDoc, 
     updateDoc, 
-    onSnapshot,
-    query,
-    where
+    onSnapshot 
 } = require('firebase/firestore');
 const express = require('express');
 
-// 1. Проверка переменных окружения
-const requiredEnv = [
-    'TELEGRAM_BOT_TOKEN', 
-    'GEMINI_API_KEY', 
-    'FIREBASE_API_KEY', 
-    'FIREBASE_PROJECT_ID'
-];
-requiredEnv.forEach(key => {
-    if (!process.env[key]) console.warn(`Внимание: Переменная ${key} не задана!`);
-});
+// --- 1. ИНИЦИАЛИЗАЦИЯ EXPRESS (для Render) ---
+const app = express();
+app.get('/', (req, res) => res.send('Aegis Bot is Alive!'));
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () => console.log(`Мониторинг запущен на порту ${PORT}`));
 
-// 2. Инициализация Telegram и ИИ
+// --- 2. ПРОВЕРКА КЛЮЧЕЙ ---
+const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || 'aegis-leads-app';
+if (!process.env.TELEGRAM_BOT_TOKEN || !process.env.GEMINI_API_KEY) {
+    console.error("КРИТИЧЕСКАЯ ОШИБКА: Токены не заданы в Environment Variables!");
+}
+
+// --- 3. ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const aiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// 3. Инициализация Firebase
 const firebaseConfig = {
     apiKey: process.env.FIREBASE_API_KEY,
     authDomain: process.env.FIREBASE_AUTH_DOMAIN,
@@ -40,109 +39,101 @@ const firebaseConfig = {
     messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
     appId: process.env.FIREBASE_APP_ID
 };
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || "default-app-id"; 
 
-// 4. Настройка моделей Gemini
-const aiModel = genAI.getGenerativeModel({
-    model: "gemini-1.5-flash",
-    systemInstruction: `Ты опытный юрист по банкротству физических лиц компании "ИДЖИС". 
-Твоя задача: вежливо консультировать, узнать сумму долга (если >300к - списание возможно), 
-узнать о наличии имущества и ипотеки. 
-Главная цель: получить номер телефона для передачи дела старшему юристу. 
-Пиши кратко, по-человечески. Не используй сложные термины.`
-});
+const fbApp = initializeApp(firebaseConfig);
+const db = getFirestore(fbApp);
 
-const summaryModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+const SYSTEM_PROMPT = `Ты — ИИ-ассистент юридической компании "ИДЖИС". 
+Твоя цель: вежливо консультировать клиентов по банкротству физлиц. 
+Отвечай кратко (до 3-4 предложений). 
+В конце старайся подвести к тому, чтобы клиент оставил свой вопрос или записался на консультацию.`;
 
-// Временное хранилище контекста (для саммари)
-const chatContext = {};
-
-// 5. Обработка сообщений из Telegram
+// --- 4. ОБРАБОТКА СООБЩЕНИЙ ИЗ TELEGRAM ---
 bot.on('message', async (msg) => {
-    const chatId = msg.chat.id.toString();
+    const chatId = String(msg.chat.id);
     const text = msg.text;
-    if (!text) return;
+    if (!text || text.startsWith('/')) return;
+
+    console.log(`[TG] Новое сообщение от ${chatId}: ${text}`);
 
     try {
         const leadRef = doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId);
         const leadSnap = await getDoc(leadRef);
-        
-        // Если оператор уже в чате - ИИ не мешает
-        if (leadSnap.exists() && leadSnap.data().status === 'operator_active') {
-            await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
-                chatId, sender: 'user', text, timestamp: Date.now()
-            });
+        const leadData = leadSnap.exists() ? leadSnap.data() : null;
+
+        // Сохраняем сообщение пользователя в историю
+        await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
+            chatId: chatId,
+            sender: 'user',
+            text: text,
+            timestamp: Date.now()
+        });
+
+        // Создаем или обновляем лида
+        await setDoc(leadRef, {
+            name: msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : ''),
+            username: msg.from.username || 'n/a',
+            updatedAt: Date.now(),
+            status: leadData?.status || 'ai_active'
+        }, { merge: true });
+
+        // Если оператор уже перехватил чат - ИИ не отвечает
+        if (leadData?.status === 'operator_active') {
+            console.log(`[AI] Пропуск ответа: в чате ${chatId} активен оператор.`);
             return;
         }
 
-        // Регистрация нового лида
-        if (!chatContext[chatId]) {
-            chatContext[chatId] = [];
-            await setDoc(leadRef, {
-                name: msg.from.first_name || 'Клиент',
-                username: msg.from.username || '',
-                status: 'ai_active',
-                createdAt: Date.now(),
-                phone: '',
-                summary: 'Диалог начат...'
-            }, { merge: true });
-        }
+        // Генерируем ответ ИИ
+        bot.sendChatAction(chatId, 'typing');
+        
+        const prompt = `${SYSTEM_PROMPT}\n\nКлиент: ${text}\nАссистент:`;
+        const result = await aiModel.generateContent(prompt);
+        const aiResponse = result.response.text();
 
-        // Сохраняем входящее
+        // Отправляем в Telegram
+        await bot.sendMessage(chatId, aiResponse);
+
+        // Сохраняем ответ ИИ в базу
         await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
-            chatId, sender: 'user', text, timestamp: Date.now()
+            chatId: chatId,
+            sender: 'ai',
+            text: aiResponse,
+            timestamp: Date.now()
         });
 
-        chatContext[chatId].push(`Клиент: ${text}`);
-
-        // Ответ ИИ
-        const chat = aiModel.startChat({ history: [] }); // Для простоты без глубокой истории в памяти
-        const result = await chat.sendMessage(text);
-        const aiText = result.response.text();
-
-        await bot.sendMessage(chatId, aiText);
-        chatContext[chatId].push(`ИИ: ${aiText}`);
-
-        // Сохраняем ответ ИИ
-        await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
-            chatId, sender: 'ai', text: aiText, timestamp: Date.now()
+        // Генерируем саммари (фоном)
+        const sumPrompt = `Сделай краткое резюме ситуации клиента (одна фраза): ${text}`;
+        const sumResult = await aiModel.generateContent(sumPrompt);
+        await updateDoc(leadRef, {
+            summary: sumResult.response.text()
         });
-
-        // Проверка на телефон и создание саммари
-        const phoneRegex = /(\+7|8)[\s(]?\d{3}[)\s]?\d{3}[\s-]?\d{2}[\s-]?\d{2}/;
-        if (phoneRegex.test(text)) {
-            const sumPrompt = `Сделай краткое резюме для юриста по этому диалогу:\n${chatContext[chatId].join('\n')}`;
-            const sumRes = await summaryModel.generateContent(sumPrompt);
-            await updateDoc(leadRef, {
-                phone: text.match(phoneRegex)[0],
-                summary: sumRes.response.text()
-            });
-        }
 
     } catch (err) {
-        console.error("Ошибка обработки ТГ:", err);
+        console.error("[ERROR] Ошибка в основном цикле бота:", err.message);
+        // Если это ошибка API ключа Gemini, мы увидим её здесь
     }
 });
 
-// 6. Пересылка сообщений из CRM в Telegram (от Юриста)
+// --- 5. ПЕРЕСЫЛКА ОТВЕТОВ ИЗ CRM В TELEGRAM ---
 const messagesRef = collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages');
-let initial = true;
-onSnapshot(messagesRef, (snap) => {
-    if (initial) { initial = false; return; }
-    snap.docChanges().forEach(change => {
-        if (change.type === 'added') {
-            const m = change.doc.data();
-            if (m.sender === 'operator') {
-                bot.sendMessage(m.chatId, m.text).catch(e => console.error("Ошибка пересылки:", e));
+let isInitialLoad = true;
+
+onSnapshot(messagesRef, (snapshot) => {
+    if (isInitialLoad) {
+        isInitialLoad = false;
+        return;
+    }
+
+    snapshot.docChanges().forEach((change) => {
+        if (change.type === "added") {
+            const data = change.doc.data();
+            // Если сообщение от оператора — шлем в ТГ
+            if (data.sender === 'operator') {
+                console.log(`[CRM] Ответ оператора для ${data.chatId}: ${data.text}`);
+                bot.sendMessage(data.chatId, data.text).catch(e => console.error("Ошибка пересылки оператора:", e.message));
             }
         }
     });
-});
+}, (err) => console.error("[ERROR] Ошибка подписки Firestore:", err.message));
 
-// 7. Простейший веб-сервер для мониторинга (нужен для Render.com)
-const appExpress = express();
-appExpress.get('/', (req, res) => res.send('Aegis AI Bot is Online 🚀'));
-const PORT = process.env.PORT || 3000;
-appExpress.listen(PORT, () => console.log(`Мониторинг запущен на порту ${PORT}`));
+console.log("Aegis AI Bot v4.3 запущен и готов к работе.");
