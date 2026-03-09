@@ -1,0 +1,17 @@
+Игнорируем папку с библиотеками (она весит 50МБ+, её не шлют на гитхаб)
+
+node_modules/
+
+ИГНОРИРУЕМ СЕКРЕТНЫЕ КЛЮЧИ (Самое важное!)
+
+.env
+.env.local
+.env.production
+
+Логи и временные файлы
+
+npm-debug.log*
+yarn-debug.log*
+.DS_Store
+dist/
+build/
