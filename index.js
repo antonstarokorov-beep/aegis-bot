@@ -24,10 +24,13 @@ bot.on('polling_error', (err) => {
     }
 });
 
-// ИНИЦИАЛИЗАЦИЯ DEEPSEEK (через библиотеку OpenAI)
+// ИНИЦИАЛИЗАЦИЯ DEEPSEEK
+// ИСПРАВЛЕНИЕ: Добавлен жесткий таймаут, чтобы бот не "зависал" при перегрузке серверов ИИ
 const openai = new OpenAI({
-    baseURL: 'https://api.deepseek.com',
-    apiKey: process.env.DEEPSEEK_API_KEY
+    baseURL: 'https://api.deepseek.com/v1', 
+    apiKey: process.env.DEEPSEEK_API_KEY,
+    timeout: 15000, // Максимальное время ожидания ответа: 15 секунд
+    maxRetries: 2   // Попробовать еще 2 раза, если произошел сбой сети
 });
 
 const fbConfig = {
@@ -70,6 +73,7 @@ bot.on('message', async (msg) => {
             status: leadData?.status || 'ai_active'
         }, { merge: true });
 
+        // Если в чате юрист — бот молчит
         if (leadData?.status === 'operator_active') return;
 
         bot.sendChatAction(chatId, 'typing');
@@ -82,32 +86,36 @@ bot.on('message', async (msg) => {
                     { role: "system", content: SYSTEM_PROMPT },
                     { role: "user", content: text }
                 ],
-                model: "deepseek-chat", // Стандартная быстрая модель DeepSeek
+                model: "deepseek-chat",
             });
             aiResponse = completion.choices[0].message.content;
             
         } catch (aiError) {
-            console.error("[DEEPSEEK AI ERROR]:", aiError.message);
-            aiResponse = "Извините, сейчас ИИ-ассистент недоступен. Ваше сообщение передано живому юристу, ожидайте ответа!";
+            console.error(`[DEEPSEEK AI ERROR]: Status ${aiError.status || 'TIMEOUT'} - ${aiError.message}`);
+            aiResponse = "Извините, серверы ИИ сейчас перегружены. Ваше сообщение передано живому юристу, ожидайте ответа!";
         }
 
+        // Отправка ответа пользователю
         await bot.sendMessage(chatId, aiResponse);
 
+        // Сохранение ответа в CRM
         await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
             chatId: chatId, sender: 'ai', text: aiResponse, timestamp: Date.now()
         });
 
-        // Саммари
+        // Генерация краткого резюме для CRM
         try {
             const summaryCompletion = await openai.chat.completions.create({
                 messages: [{ role: "user", content: `Краткое резюме проблемы одним предложением: ${text}` }],
                 model: "deepseek-chat",
             });
             await updateDoc(leadRef, { summary: summaryCompletion.choices[0].message.content });
-        } catch(e) {}
+        } catch(e) {} // Ошибку саммари игнорируем тихо
 
     } catch (err) {
         console.error("[FATAL ERROR]:", err.message);
+        // Если база данных упала, всё равно пытаемся ответить клиенту
+        bot.sendMessage(chatId, "Произошла системная ошибка, но мы получили ваше сообщение.").catch(() => {});
     }
 });
 
