@@ -27,8 +27,10 @@ bot.on('polling_error', (err) => {
 });
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
 // ИСПРАВЛЕНИЕ 404: Используем самую базовую модель, доступную для всех ключей
-const aiModel = genAI.getGenerativeModel({ model: "gemini-pro" });
+const MODEL_NAME = "gemini-pro";
+const aiModel = genAI.getGenerativeModel({ model: MODEL_NAME });
 
 const fbConfig = {
     apiKey: process.env.FIREBASE_API_KEY,
@@ -110,4 +112,5 @@ onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages')
     });
 });
 
-console.log(`[SYSTEM] Aegis AI Bot is running. Syncing with CRM ID: ${CRM_APP_ID}`);
+// Явный вывод текущей модели в консоль, чтобы вы точно знали, что код обновился на сервере
+console.log(`[SYSTEM] Aegis AI Bot is running. Model: ${MODEL_NAME}. Syncing with CRM ID: ${CRM_APP_ID}`);
