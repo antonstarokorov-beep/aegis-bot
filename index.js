@@ -8,7 +8,7 @@ import express from 'express';
 
 // --- 1. HEALTH CHECK ---
 const app = express();
-app.get('/', (req, res) => res.send('Aegis Bot (Clean Voice Pro): Online'));
+app.get('/', (req, res) => res.send('Aegis Bot (Legal Pro): Online'));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`[SYSTEM] Monitoring on port ${PORT}`));
 
@@ -38,29 +38,26 @@ const db = getFirestore(fbApp);
 
 signInAnonymously(auth).catch(e => console.error("Firebase Auth Error:", e));
 
-// --- 3. ПРОМПТ "АНТОН-ЭКСПЕРТ" (БЕЗ ВОПРОСОВ В ГОЛОСЕ) ---
-const SYSTEM_PROMPT = `Ты — Антон, ведущий юрист. Ты профессионал, решительный и занятой человек. 
+// --- 3. ЛИЧНОСТЬ "АНТОН БОРИСОВИЧ" (ЮРИСТ-ЭКСПЕРТ) ---
+const SYSTEM_PROMPT = `Ты — Антон Борисович, ведущий юрист по делам о несостоятельности (банкротстве). Твой стиль — профессиональный прагматизм.
 
-ПРАВИЛА ТЕКСТА:
-- Пиши коротко, грамотно, без лишней воды. 
-- В тексте вопросы допустимы (например: "Какая общая сумма долга?").
+ТВОЙ НОВЫЙ СТИЛЬ:
+- СТРОГО ЗАПРЕЩЕНО использовать: "ну", "эээ", "короче", "слушайте", "типа".
+- Речь должна быть грамотной, лаконичной и авторитетной.
+- Используй термины: "127-й Федеральный закон", "судебная практика", "сохранение активов", "реестр кредиторов".
+- Ты не заискиваешь перед клиентом. Ты предлагаешь юридическое решение проблемы.
 
-ПРАВИЛА ГОЛОСА [VOICE]:
-- ВНУТРИ тега [VOICE] ЗАПРЕЩЕНО использовать любые вопросы.
-- Весь текст в [VOICE] должен состоять из утвердительных предложений.
-- ЗАПРЕЩЕНО использовать "эээ", "ну...", "ммм" и прочий мусор. Речь должна быть четкой.
-- Вместо того чтобы спрашивать "Можем созвониться?", говори "Давайте я наберу и всё объясню." или "Жду ваш номер, я сейчас на связи."
-
-ВОРОНКА:
-1. Квалификация: узнай сумму долга и наличие имущества.
-2. Закрытие: как только картина ясна, отправь [VOICE] сообщение с четким призывом к действию.
-   Пример: "[VOICE] Ситуация абсолютно рабочая. Под сто двадцать седьмой закон проходите. Давайте я вам наберу прямо сейчас на две минуты и всё по пунктам разложу. Пишите ваш номер, я жду.";`;
+АЛГОРИТМ:
+1. Квалификация: Узнай точный размер задолженности (основной долг + пени).
+2. Анализ активов: Выясни наличие зарегистрированного имущества (недвижимость, транспорт) и сделок за последние 3 года.
+3. ПЕРЕХОД НА [VOICE]: Когда ситуация ясна, запиши голосовое (без вопросов!).
+   Пример: "[VOICE] Ситуация понятна. Предварительно вы полностью подходите под критерии сто двадцать седьмого федерального закона. Чтобы я подготовил стратегию сохранения вашего имущества, мне нужно задать три технических вопроса. Я наберу вам сейчас. Оставьте ваш контактный номер.";`;
 
 // --- ФУНКЦИЯ ОЧИСТКИ ТЕКСТА ДЛЯ TTS ---
 function cleanTextForTTS(text) {
     return text
-        .replace(/\?/g, '.')      // Убираем вопросы, ставим точки
-        .replace(/э-э-э|эээ|ммм|ну\.\.\.|\.\.\.|\.\.|\sэ\s/gi, ' ') // Убираем мусор если ИИ забыл
+        .replace(/\?/g, '.')
+        .replace(/э-э-э|эээ|ммм|ну\.\.\.|\.\.\.|\.\.|\sэ\s|короче|слушайте/gi, ' ')
         .replace(/\s+/g, ' ') 
         .trim();
 }
@@ -82,9 +79,9 @@ async function generateVoice(text) {
                 text: cleanText,
                 model_id: "eleven_multilingual_v2",
                 voice_settings: { 
-                    stability: 0.45,       // Чуть выше стабильность для четкости
+                    stability: 0.55,       // Повысили стабильность для более "сухого" и уверенного тона
                     similarity_boost: 0.8, 
-                    style: 0.4, 
+                    style: 0.35, 
                     use_speaker_boost: true 
                 }
             })
@@ -100,13 +97,13 @@ bot.on('message', async (msg) => {
     const chatId = String(msg.chat.id);
     const text = msg.text;
     if (!text || text.startsWith('/')) {
-        if (text === '/start') bot.sendMessage(chatId, "Добрый день! Я Антон, профильный юрист. Какая у вас сейчас общая сумма задолженности?");
+        if (text === '/start') bot.sendMessage(chatId, "Здравствуйте. Я Антон Борисович, профильный юрист по вопросам банкротства. Укажите, пожалуйста, общую сумму вашей задолженности перед кредиторами.");
         if (text === '/reset') {
             const allMsgsSnap = await getDocs(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'));
             const msgsToDelete = allMsgsSnap.docs.filter(d => d.data().chatId === chatId);
             for (const docSnap of msgsToDelete) await deleteDoc(doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages', docSnap.id));
             await setDoc(doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId), { summary: "", phone: null, status: 'ai_active', updatedAt: Date.now() }, { merge: true });
-            bot.sendMessage(chatId, "🔄 История очищена.");
+            bot.sendMessage(chatId, "Процедура сброшена. Система готова к новому диалогу.");
         }
         return;
     }
@@ -135,7 +132,7 @@ bot.on('message', async (msg) => {
 
         if (textPart) {
             bot.sendChatAction(chatId, 'typing');
-            await new Promise(r => setTimeout(r, Math.min(textPart.length * 50, 5000)));
+            await new Promise(r => setTimeout(r, Math.min(textPart.length * 40, 4000)));
             await bot.sendMessage(chatId, textPart);
             await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
                 chatId: chatId, sender: 'ai', text: textPart, timestamp: Date.now()
@@ -159,11 +156,10 @@ bot.on('message', async (msg) => {
             }
         }
 
-        // Саммари для CRM
         try {
             const userMsgs = chatHistory.filter(m => m.sender === 'user').map(m => m.text).join('. ');
             const sumRes = await openai.chat.completions.create({
-                messages: [{ role: "user", content: `Сделай выжимку (долг, имущество, цель) до 50 слов: ${userMsgs}` }],
+                messages: [{ role: "user", content: `Сделай юридическое резюме ситуации (сумма, активы, риск) до 50 слов: ${userMsgs}` }],
                 model: "deepseek-chat"
             });
             await updateDoc(leadRef, { 
