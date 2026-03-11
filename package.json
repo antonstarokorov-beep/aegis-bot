@@ -9,11 +9,11 @@
     "dev": "node --watch index.js"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.21.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.1",
     "firebase": "^11.0.2",
-    "node-telegram-bot-api": "^0.66.0"
+    "node-telegram-bot-api": "^0.66.0",
+    "openai": "^6.27.0"
   },
   "engines": {
     "node": ">=18.0.0"

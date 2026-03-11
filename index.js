@@ -1,13 +1,13 @@
 import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import express from 'express';
 
 // --- 1. HEALTH CHECK ---
 const app = express();
-app.get('/', (req, res) => res.send('Aegis AI Bot: Online'));
+app.get('/', (req, res) => res.send('Aegis AI Bot (DeepSeek Edition): Online'));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`[SYSTEM] Monitoring on port ${PORT}`));
 
@@ -16,19 +16,19 @@ const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || 'aegis-leads-app';
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-// Защита от конфликта 409
 bot.on('polling_error', (err) => {
     if (err.message.includes('409 Conflict')) {
-        console.warn('[SYSTEM] Конфликт 409: Выключите локальную копию бота.');
+        console.warn('[SYSTEM] Конфликт 409: Выключите локальную копию.');
         bot.stopPolling();
         setTimeout(() => bot.startPolling(), 10000);
     }
 });
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// Возвращаем самую умную и быструю модель
-const MODEL_NAME = "gemini-1.5-flash";
-const aiModel = genAI.getGenerativeModel({ model: MODEL_NAME });
+// ИНИЦИАЛИЗАЦИЯ DEEPSEEK (через библиотеку OpenAI)
+const openai = new OpenAI({
+    baseURL: 'https://api.deepseek.com',
+    apiKey: process.env.DEEPSEEK_API_KEY
+});
 
 const fbConfig = {
     apiKey: process.env.FIREBASE_API_KEY,
@@ -74,15 +74,21 @@ bot.on('message', async (msg) => {
 
         bot.sendChatAction(chatId, 'typing');
         
-        // Попытка получить ответ от ИИ
         let aiResponse = "";
         try {
-            const result = await aiModel.generateContent(`${SYSTEM_PROMPT}\n\nКлиент: ${text}\nАссистент:`);
-            aiResponse = result.response.text();
+            // Запрос к DeepSeek
+            const completion = await openai.chat.completions.create({
+                messages: [
+                    { role: "system", content: SYSTEM_PROMPT },
+                    { role: "user", content: text }
+                ],
+                model: "deepseek-chat", // Стандартная быстрая модель DeepSeek
+            });
+            aiResponse = completion.choices[0].message.content;
+            
         } catch (aiError) {
-            console.error("[GOOGLE AI ERROR]:", aiError.message);
-            // Если Google блокирует запрос (404 или другая ошибка), бот не зависнет!
-            aiResponse = "Извините, сейчас ИИ-ассистент недоступен (ошибка ключа Google). Но ваше сообщение уже передано живому юристу, ожидайте ответа!";
+            console.error("[DEEPSEEK AI ERROR]:", aiError.message);
+            aiResponse = "Извините, сейчас ИИ-ассистент недоступен. Ваше сообщение передано живому юристу, ожидайте ответа!";
         }
 
         await bot.sendMessage(chatId, aiResponse);
@@ -91,10 +97,13 @@ bot.on('message', async (msg) => {
             chatId: chatId, sender: 'ai', text: aiResponse, timestamp: Date.now()
         });
 
-        // Саммари (игнорируем ошибку ИИ, чтобы не ломать логику)
+        // Саммари
         try {
-            const summaryRes = await aiModel.generateContent(`Резюме проблемы одним предложением: ${text}`);
-            await updateDoc(leadRef, { summary: summaryRes.response.text() });
+            const summaryCompletion = await openai.chat.completions.create({
+                messages: [{ role: "user", content: `Краткое резюме проблемы одним предложением: ${text}` }],
+                model: "deepseek-chat",
+            });
+            await updateDoc(leadRef, { summary: summaryCompletion.choices[0].message.content });
         } catch(e) {}
 
     } catch (err) {
@@ -114,4 +123,4 @@ onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages')
     });
 });
 
-console.log(`[SYSTEM] Aegis AI Bot is running. Model: ${MODEL_NAME}. Sync: ${CRM_APP_ID}`);
+console.log(`[SYSTEM] Aegis AI Bot is running. Model: DeepSeek. Sync: ${CRM_APP_ID}`);
