@@ -5,7 +5,6 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc, onSnapshot, getDocs, deleteDoc } from 'firebase/firestore';
 import express from 'express';
-import fetch from 'node-fetch';
 
 // --- 1. HEALTH CHECK ---
 const app = express();
