@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "AI Telegram Bot for Aegis CRM",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js",
     "dev": "node --watch index.js"
