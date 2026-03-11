@@ -12,7 +12,6 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`[SYSTEM] Monitoring on port ${PORT}`));
 
 // --- 2. CONFIG ---
-// Берем ID из твоего .env файла (aegis-leads-app)
 const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || 'aegis-leads-app';
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
@@ -20,16 +19,15 @@ const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 // Защита от конфликта 409
 bot.on('polling_error', (err) => {
     if (err.message.includes('409 Conflict')) {
-        console.warn('[SYSTEM] Конфликт 409: Бот запущен на ПК и на Render одновременно! Выключите одну из копий.');
+        console.warn('[SYSTEM] Конфликт 409: Выключите локальную копию бота.');
         bot.stopPolling();
         setTimeout(() => bot.startPolling(), 10000);
     }
 });
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// ИСПРАВЛЕНИЕ 404: Используем самую базовую модель, доступную для всех ключей
-const MODEL_NAME = "gemini-pro";
+// Возвращаем самую умную и быструю модель
+const MODEL_NAME = "gemini-1.5-flash";
 const aiModel = genAI.getGenerativeModel({ model: MODEL_NAME });
 
 const fbConfig = {
@@ -61,12 +59,10 @@ bot.on('message', async (msg) => {
         const leadSnap = await getDoc(leadRef);
         const leadData = leadSnap.exists() ? leadSnap.data() : null;
 
-        // Сохраняем сообщение пользователя
         await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
             chatId: chatId, sender: 'user', text: text, timestamp: Date.now()
         });
 
-        // Создаем лида
         await setDoc(leadRef, {
             name: msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : ''),
             username: msg.from.username || 'n/a',
@@ -74,29 +70,35 @@ bot.on('message', async (msg) => {
             status: leadData?.status || 'ai_active'
         }, { merge: true });
 
-        // Если в чате юрист — бот молчит
         if (leadData?.status === 'operator_active') return;
 
         bot.sendChatAction(chatId, 'typing');
         
-        // Генерация ответа через Gemini
-        const result = await aiModel.generateContent(`${SYSTEM_PROMPT}\n\nКлиент: ${text}\nАссистент:`);
-        const aiResponse = result.response.text();
+        // Попытка получить ответ от ИИ
+        let aiResponse = "";
+        try {
+            const result = await aiModel.generateContent(`${SYSTEM_PROMPT}\n\nКлиент: ${text}\nАссистент:`);
+            aiResponse = result.response.text();
+        } catch (aiError) {
+            console.error("[GOOGLE AI ERROR]:", aiError.message);
+            // Если Google блокирует запрос (404 или другая ошибка), бот не зависнет!
+            aiResponse = "Извините, сейчас ИИ-ассистент недоступен (ошибка ключа Google). Но ваше сообщение уже передано живому юристу, ожидайте ответа!";
+        }
 
-        // Отправка клиенту
         await bot.sendMessage(chatId, aiResponse);
 
-        // Лог ответа в базу
         await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
             chatId: chatId, sender: 'ai', text: aiResponse, timestamp: Date.now()
         });
 
-        // Саммари (краткая суть для списка)
-        const summaryRes = await aiModel.generateContent(`Краткое резюме проблемы одним предложением: ${text}`);
-        await updateDoc(leadRef, { summary: summaryRes.response.text() });
+        // Саммари (игнорируем ошибку ИИ, чтобы не ломать логику)
+        try {
+            const summaryRes = await aiModel.generateContent(`Резюме проблемы одним предложением: ${text}`);
+            await updateDoc(leadRef, { summary: summaryRes.response.text() });
+        } catch(e) {}
 
     } catch (err) {
-        console.error("[ERROR] Gemini logic failed:", err.message);
+        console.error("[FATAL ERROR]:", err.message);
     }
 });
 
@@ -112,5 +114,4 @@ onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages')
     });
 });
 
-// Явный вывод текущей модели в консоль, чтобы вы точно знали, что код обновился на сервере
-console.log(`[SYSTEM] Aegis AI Bot is running. Model: ${MODEL_NAME}. Syncing with CRM ID: ${CRM_APP_ID}`);
+console.log(`[SYSTEM] Aegis AI Bot is running. Model: ${MODEL_NAME}. Sync: ${CRM_APP_ID}`);
