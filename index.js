@@ -2,45 +2,34 @@ import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { initializeApp } from 'firebase/app';
-import { 
-    getFirestore, 
-    collection, 
-    addDoc, 
-    doc, 
-    setDoc, 
-    getDoc, 
-    updateDoc, 
-    onSnapshot 
-} from 'firebase/firestore';
+import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 import express from 'express';
 
-// --- 1. HEALTH CHECK SERVER (Для Render) ---
+// --- 1. HEALTH CHECK ---
 const app = express();
 app.get('/', (req, res) => res.send('Aegis AI Bot: Online'));
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`[SYSTEM] Мониторинг на порту ${PORT}`));
+app.listen(PORT, () => console.log(`[SYSTEM] Monitoring on port ${PORT}`));
 
-// --- 2. КОНФИГУРАЦИЯ ---
-const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || 'aegis-leads-app';
+// --- 2. CONFIG ---
+// Жестко фиксируем ID для синхронизации с CRM
+const CRM_APP_ID = 'c_4e520df03c9fb749_src';
 
-// Инициализация Telegram
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 // Защита от 409 Conflict
-bot.on('polling_error', (error) => {
-    if (error.message.includes('409 Conflict')) {
-        console.warn('[RETRY] Конфликт соединений. Ожидание 10с...');
+bot.on('polling_error', (err) => {
+    if (err.message.includes('409 Conflict')) {
+        console.warn('[RETRY] Conflict. Waiting 10s...');
         bot.stopPolling();
         setTimeout(() => bot.startPolling(), 10000);
     }
 });
 
-// Инициализация Gemini (Исправлено для предотвращения 404)
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const aiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-// Инициализация Firebase
-const firebaseConfig = {
+const fbConfig = {
     apiKey: process.env.FIREBASE_API_KEY,
     authDomain: process.env.FIREBASE_AUTH_DOMAIN,
     projectId: process.env.FIREBASE_PROJECT_ID,
@@ -49,36 +38,29 @@ const firebaseConfig = {
     appId: process.env.FIREBASE_APP_ID
 };
 
-const fbApp = initializeApp(firebaseConfig);
+const fbApp = initializeApp(fbConfig);
 const db = getFirestore(fbApp);
 
-const SYSTEM_PROMPT = `Ты — ИИ-ассистент юридической компании "ИДЖИС". 
-Твоя цель: вежливо консультировать клиентов по списанию долгов и банкротству. 
-Отвечай кратко (до 3 предложений). Спрашивай сумму долга.`;
+const SYSTEM_PROMPT = `Ты — юридический ассистент компании "ИДЖИС". 
+Отвечай вежливо и кратко (2-3 предложения). Спрашивай сумму долга клиента.`;
 
-// --- 3. ЛОГИКА ТЕЛЕГРАМ ---
+// --- 3. TELEGRAM LOGIC ---
 bot.on('message', async (msg) => {
     const chatId = String(msg.chat.id);
     const text = msg.text;
-
     if (!text || text.startsWith('/')) return;
 
-    console.log(`[TG] Сообщение от ${chatId}: ${text}`);
+    console.log(`[TG] Message from ${chatId}: ${text}`);
 
     try {
         const leadRef = doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId);
         const leadSnap = await getDoc(leadRef);
         const leadData = leadSnap.exists() ? leadSnap.data() : null;
 
-        // Сохраняем сообщение пользователя
         await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
-            chatId: chatId,
-            sender: 'user',
-            text: text,
-            timestamp: Date.now()
+            chatId: chatId, sender: 'user', text: text, timestamp: Date.now()
         });
 
-        // Создаем/обновляем лида
         await setDoc(leadRef, {
             name: msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : ''),
             username: msg.from.username || 'n/a',
@@ -86,48 +68,36 @@ bot.on('message', async (msg) => {
             status: leadData?.status || 'ai_active'
         }, { merge: true });
 
-        // Если в чате оператор — бот не отвечает
         if (leadData?.status === 'operator_active') return;
 
         bot.sendChatAction(chatId, 'typing');
-        
-        // Ответ ИИ
         const result = await aiModel.generateContent(`${SYSTEM_PROMPT}\n\nКлиент: ${text}\nАссистент:`);
         const aiResponse = result.response.text();
 
         await bot.sendMessage(chatId, aiResponse);
 
-        // Сохраняем ответ ИИ
         await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
-            chatId: chatId,
-            sender: 'ai',
-            text: aiResponse,
-            timestamp: Date.now()
+            chatId: chatId, sender: 'ai', text: aiResponse, timestamp: Date.now()
         });
 
-        // Саммари
-        const sumResult = await aiModel.generateContent(`Краткое резюме проблемы одним предложением: ${text}`);
-        await updateDoc(leadRef, {
-            summary: sumResult.response.text()
-        });
+        const sumRes = await aiModel.generateContent(`Summarize in 5 words: ${text}`);
+        await updateDoc(leadRef, { summary: sumRes.response.text() });
 
     } catch (err) {
-        console.error("[ERROR] Ошибка бота:", err.message);
+        console.error("[ERROR]", err.message);
     }
 });
 
-// --- 4. ПЕРЕСЫЛКА ИЗ CRM ---
+// --- 4. CRM SYNC ---
 onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), (snap) => {
     snap.docChanges().forEach(change => {
         if (change.type === 'added') {
             const m = change.doc.data();
             if (m.sender === 'operator') {
-                bot.sendMessage(m.chatId, m.text).catch(e => {
-                    if (!e.message.includes('409')) console.error("Ошибка пересылки:", e.message);
-                });
+                bot.sendMessage(m.chatId, m.text).catch(() => {});
             }
         }
     });
 });
 
-console.log(`[READY] Aegis AI Bot запущен. Sync ID: ${CRM_APP_ID}`);
+console.log(`[READY] Aegis AI Bot running. ID: ${CRM_APP_ID}`);
