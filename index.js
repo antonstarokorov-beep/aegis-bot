@@ -8,13 +8,12 @@ import express from 'express';
 
 // --- 1. HEALTH CHECK ---
 const app = express();
-app.get('/', (req, res) => res.send('Aegis Bot (Pro Edition + Commands): Online'));
+app.get('/', (req, res) => res.send('Aegis Bot (Sales Pro + Voice Debug): Online'));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`[SYSTEM] Monitoring on port ${PORT}`));
 
 // --- 2. CONFIG ---
 const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || 'aegis-leads-app';
-
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
 const openai = new OpenAI({
@@ -39,51 +38,57 @@ const db = getFirestore(fbApp);
 
 signInAnonymously(auth).catch(e => console.error("Firebase Auth Error:", e));
 
-// --- 3. ЛИЧНОСТЬ ---
-const SYSTEM_PROMPT = `Ты — частный юрист и эксперт по списанию долгов. Твоя цель — квалифицировать клиента и вывести его на звонок.
-Веди диалог от первого лица ("я понял", "посмотрим"). Ты общаешься в Telegram, поэтому пиши коротко, без сложных терминов.
+// --- 3. СУПЕР ПРОДАЖНИК (ПРОМПТ) ---
+const SYSTEM_PROMPT = `Ты — ведущий эксперт по банкротству физических лиц. Ты не бот, ты профессионал. Твоя задача — закрыть клиента на телефонный звонок.
 
-ПРАВИЛА И ЭМПАТИЯ:
-1. Ты живой человек. Используй фразы: "понимаю вас", "ситуация стандартная", "не переживайте".
-2. В каждом сообщении делай небольшую логическую паузу или задавай только ОДИН простой вопрос.
-3. Никогда не уговаривай. Если сомневаются, используй метод отталкивания: "Дело ваше, главное помните, что долг сам не исчезнет. Надумаете — пишите."
+ТВОЙ СТИЛЬ:
+- Уверенный, авторитетный. Пиши коротко.
+- Используй фразы: "Ситуация понятная", "Смотрите, как мы поступим".
 
-ВОРОНКА ПРОДАЖ:
-Шаг 1. Аккуратно узнай общую сумму долга.
-       - Если до 300к: "Слушайте, с такой суммой процедура может быть невыгодна. Но давайте я наберу, прикинем варианты. Оставьте номер."
-Шаг 2. Узнай про ипотеку, доход или семейное положение (между делом).
-Шаг 3. ВАЖНО: Как только узнал сумму и базовую ситуацию, отправь клиенту ГОЛОСОВОЕ сообщение. 
-       Чтобы отправить голосовое, начни свой ответ со слова [VOICE], а дальше напиши текст, который нужно озвучить.
-       Пример: "[VOICE] Слушайте, ситуация абсолютно рабочая. Давайте я вам сейчас наберу, задам пару вопросов и точно скажу, сколько спишем. Напишите свой номер."
+АЛГОРИТМ ПРОДАЖИ:
+1. Узнай общую сумму долгов. 
+2. Узнай про имущество или ипотеку.
+3. Как только у тебя есть цифры, сделай оффер через голосовое.
+   Чтобы отправить голосовое, ОБЯЗАТЕЛЬНО начни ответ со слова [VOICE].
+   Пример: "[VOICE] Слушайте, ситуация рабочая. Давайте я вам сейчас наберу на 2 минуты, задам пару вопросов и точно скажу, какую сумму спишем. Вам удобнее сейчас или через полчаса? Напишите номер."`;
 
-ОТРАБОТКА ВОЗРАЖЕНИЙ:
-- Гарантии/Цена: "Оплата зависит от сложности, гарантии прописываем в договоре. Консультация бесплатная. Оставьте номер, всё расскажу."`;
-
-// --- ФУНКЦИЯ ELEVENLABS ---
+// --- ФУНКЦИЯ ELEVENLABS (С ПОДРОБНЫМ ЛОГИРОВАНИЕМ) ---
 async function generateVoice(text) {
     const apiKey = process.env.ELEVENLABS_API_KEY;
     const voiceId = process.env.ELEVENLABS_VOICE_ID;
     
-    if (!apiKey || !voiceId) return null;
+    if (!apiKey || !voiceId) {
+        console.error("[VOICE] Ошибка: Проверь ELEVENLABS_API_KEY и ELEVENLABS_VOICE_ID на Render!");
+        return null;
+    }
 
-    const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream`;
+    const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
     try {
         const response = await fetch(url, {
             method: 'POST',
             headers: {
                 'xi-api-key': apiKey,
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'accept': 'audio/mpeg'
             },
             body: JSON.stringify({
                 text: text,
                 model_id: "eleven_multilingual_v2",
-                voice_settings: { stability: 0.5, similarity_boost: 0.75 }
+                voice_settings: { stability: 0.5, similarity_boost: 0.8 }
             })
         });
-        if (!response.ok) throw new Error("ElevenLabs API error");
-        return await response.arrayBuffer();
+
+        if (!response.ok) {
+            // Читаем текст ошибки от ElevenLabs, чтобы понять что не так
+            const errorText = await response.text();
+            console.error(`[VOICE ERROR] Status: ${response.status}. Message: ${errorText}`);
+            return null;
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        return Buffer.from(arrayBuffer);
     } catch (e) {
-        console.error("Voice Gen Error:", e);
+        console.error("[VOICE FATAL ERROR]:", e.message);
         return null;
     }
 }
@@ -94,52 +99,34 @@ bot.on('message', async (msg) => {
     const text = msg.text;
     if (!text) return;
 
-    // ==========================================
-    // БЛОК СКРЫТЫХ СЕРВИСНЫХ КОМАНД
-    // ==========================================
+    // СЕРВИСНЫЕ КОМАНДЫ
     if (text.startsWith('/')) {
         const leadRef = doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId);
-        
         if (text === '/start') {
-            bot.sendMessage(chatId, "Здравствуйте! Я профильный юрист компании ИДЖИС. Какая у вас общая сумма долгов по кредитам и займам?");
+            bot.sendMessage(chatId, "Добрый день! Я юрист компании ИДЖИС. Какая у вас общая сумма задолженности?");
             return;
         }
-        if (text === '/id') {
-            bot.sendMessage(chatId, `🔧 Ваш Telegram ID: ${chatId}\nCRM Sync ID: ${CRM_APP_ID}`);
-            return;
-        }
-        if (text === '/pause') {
-            await setDoc(leadRef, { status: 'operator_active', updatedAt: Date.now() }, { merge: true });
-            bot.sendMessage(chatId, "⏸ ИИ поставлен на паузу. Бот больше не будет отвечать на ваши сообщения.");
-            return;
-        }
-        if (text === '/resume') {
-            await setDoc(leadRef, { status: 'ai_active', updatedAt: Date.now() }, { merge: true });
-            bot.sendMessage(chatId, "▶️ ИИ активирован. Бот снова в деле.");
+        if (text === '/debug_voice') {
+            bot.sendMessage(chatId, "⏳ Проверка ElevenLabs... Секунду.");
+            const testVoice = await generateVoice("Проверка связи. Как слышно?");
+            if (testVoice) {
+                await bot.sendVoice(chatId, testVoice);
+                bot.sendMessage(chatId, "✅ Голос работает!");
+            } else {
+                bot.sendMessage(chatId, "❌ Ошибка. Проверь логи в панели Render.com (кнопка Logs).");
+            }
             return;
         }
         if (text === '/reset') {
-            bot.sendMessage(chatId, "🔄 Очистка истории переписки...");
-            try {
-                const allMsgsSnap = await getDocs(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'));
-                const msgsToDelete = allMsgsSnap.docs.filter(d => d.data().chatId === chatId);
-                
-                for (const docSnap of msgsToDelete) {
-                    await deleteDoc(doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages', docSnap.id));
-                }
-                
-                await setDoc(leadRef, { summary: "", phone: null, status: 'ai_active', updatedAt: Date.now() }, { merge: true });
-                bot.sendMessage(chatId, "✅ История полностью удалена. Напишите любое сообщение, чтобы начать заново.");
-            } catch (err) {
-                bot.sendMessage(chatId, "❌ Ошибка при удалении: " + err.message);
-            }
+            const allMsgsSnap = await getDocs(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'));
+            const msgsToDelete = allMsgsSnap.docs.filter(d => d.data().chatId === chatId);
+            for (const docSnap of msgsToDelete) await deleteDoc(doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages', docSnap.id));
+            await setDoc(leadRef, { summary: "", phone: null, status: 'ai_active', updatedAt: Date.now() }, { merge: true });
+            bot.sendMessage(chatId, "✨ История очищена.");
             return;
         }
         return;
     }
-    // ==========================================
-
-    console.log(`[TG] Сообщение от ${chatId}: ${text}`);
 
     try {
         const leadRef = doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId);
@@ -159,9 +146,8 @@ bot.on('message', async (msg) => {
 
         if (currentStatus === 'operator_active') {
             const timeSinceLastUpdate = Date.now() - (leadData?.updatedAt || 0);
-            if (timeSinceLastUpdate > 5 * 60 * 1000) {
-                currentStatus = 'ai_active';
-            } else {
+            if (timeSinceLastUpdate > 5 * 60 * 1000) currentStatus = 'ai_active';
+            else {
                 await updateDoc(leadRef, { updatedAt: Date.now(), phone: updatedPhone });
                 return;
             }
@@ -175,7 +161,6 @@ bot.on('message', async (msg) => {
             phone: updatedPhone
         }, { merge: true });
 
-        // Читаем историю
         const allMsgsSnap = await getDocs(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'));
         const chatHistory = allMsgsSnap.docs
             .map(d => d.data())
@@ -190,76 +175,52 @@ bot.on('message', async (msg) => {
             }
         });
 
-        let aiResponse = "";
-        try {
-            const completion = await openai.chat.completions.create({
-                messages: apiMessages,
-                model: "deepseek-chat",
-            });
-            aiResponse = completion.choices[0].message.content;
-        } catch (aiError) {
-            aiResponse = "Слушайте, сейчас немного занят на заседании. Оставьте номер, наберу как освобожусь!";
-        }
+        const completion = await openai.chat.completions.create({ messages: apiMessages, model: "deepseek-chat" });
+        let aiResponse = completion.choices[0].message.content;
 
         const isVoiceMsg = aiResponse.includes('[VOICE]');
-        const textToType = aiResponse.replace('[VOICE]', '').trim();
-        
+        const textToProcess = aiResponse.replace('[VOICE]', '').trim();
         bot.sendChatAction(chatId, isVoiceMsg ? 'record_voice' : 'typing');
         
-        const typingDelay = Math.min(Math.max(textToType.length * 60, 2000), 8000); 
-        await new Promise(resolve => setTimeout(resolve, typingDelay));
+        const delay = Math.min(Math.max(textToProcess.length * 80, 2500), 9000);
+        await new Promise(r => setTimeout(r, delay));
 
         if (isVoiceMsg) {
-            const voiceBuffer = await generateVoice(textToType);
+            const voiceBuffer = await generateVoice(textToProcess);
             if (voiceBuffer) {
-                await bot.sendVoice(chatId, Buffer.from(voiceBuffer));
+                await bot.sendVoice(chatId, voiceBuffer);
                 await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
-                    chatId: chatId, sender: 'ai', text: `🔊 [Голосовое сообщение]: ${textToType}`, timestamp: Date.now()
+                    chatId: chatId, sender: 'ai', text: `🔊 [Голосовое сообщение]: ${textToProcess}`, timestamp: Date.now()
                 });
             } else {
-                await bot.sendMessage(chatId, textToType);
+                await bot.sendMessage(chatId, textToProcess);
                 await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
-                    chatId: chatId, sender: 'ai', text: textToType, timestamp: Date.now()
+                    chatId: chatId, sender: 'ai', text: textToProcess, timestamp: Date.now()
                 });
             }
         } else {
-            await bot.sendMessage(chatId, textToType);
+            await bot.sendMessage(chatId, textToProcess);
             await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
-                chatId: chatId, sender: 'ai', text: textToType, timestamp: Date.now()
+                chatId: chatId, sender: 'ai', text: textToProcess, timestamp: Date.now()
             });
         }
 
-        // ==========================================
-        // ОБНОВЛЕННОЕ ПОЛНОЦЕННОЕ САММАРИ
-        // ==========================================
         try {
             const userTexts = chatHistory.filter(m => m.sender === 'user').map(m => m.text).join('. ');
-            if (userTexts.length > 5) {
-                const summaryCompletion = await openai.chat.completions.create({
-                    messages: [{ 
-                        role: "user", 
-                        content: `Составь информативное резюме ситуации клиента на основе его сообщений. Обязательно укажи ключевые факты (если они упоминались): общую сумму долга, наличие ипотеки или автокредита, семейное положение, официальный доход и текущую проблему (например, звонят коллекторы или просрочки). Пиши сухо, по делу, как аналитическую выжимку для старшего юриста. Строго не более 50 слов! Текст клиента: ${userTexts}` 
-                    }],
-                    model: "deepseek-chat",
-                });
-                await updateDoc(leadRef, { summary: summaryCompletion.choices[0].message.content.replace(/["']/g, '') });
-            }
+            const sumComp = await openai.chat.completions.create({
+                messages: [{ role: "user", content: `Сделай резюме ситуации клиента (долг, ипотека, доход, проблемы) до 50 слов. Текст: ${userTexts}` }],
+                model: "deepseek-chat",
+            });
+            await updateDoc(leadRef, { summary: sumComp.choices[0].message.content });
         } catch(e) {}
 
-    } catch (err) {
-        console.error("[FATAL ERROR]:", err.message);
-    }
+    } catch (err) { console.error("[FATAL ERROR]:", err.message); }
 });
 
 onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), (snap) => {
     snap.docChanges().forEach(change => {
-        if (change.type === 'added') {
-            const m = change.doc.data();
-            if (m.sender === 'operator') {
-                bot.sendMessage(m.chatId, m.text).catch(() => {});
-            }
+        if (change.type === 'added' && change.doc.data().sender === 'operator') {
+            bot.sendMessage(change.doc.data().chatId, change.doc.data().text).catch(() => {});
         }
     });
 });
-
-console.log(`[SYSTEM] Aegis Pro Bot is running. Sync: ${CRM_APP_ID}`);
