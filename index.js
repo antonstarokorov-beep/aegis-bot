@@ -12,22 +12,23 @@ const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`[SYSTEM] Monitoring on port ${PORT}`));
 
 // --- 2. CONFIG ---
-// Жестко фиксируем ID для синхронизации с CRM
-const CRM_APP_ID = 'c_4e520df03c9fb749_src';
+// Берем ID из твоего .env файла (aegis-leads-app)
+const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || 'aegis-leads-app';
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-// Защита от 409 Conflict
+// Защита от конфликта 409
 bot.on('polling_error', (err) => {
     if (err.message.includes('409 Conflict')) {
-        console.warn('[RETRY] Conflict. Waiting 10s...');
+        console.warn('[SYSTEM] Конфликт 409: Бот запущен на ПК и на Render одновременно! Выключите одну из копий.');
         bot.stopPolling();
         setTimeout(() => bot.startPolling(), 10000);
     }
 });
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const aiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+// ИСПРАВЛЕНИЕ 404: Добавлено "-latest" к названию модели
+const aiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
 
 const fbConfig = {
     apiKey: process.env.FIREBASE_API_KEY,
@@ -41,8 +42,9 @@ const fbConfig = {
 const fbApp = initializeApp(fbConfig);
 const db = getFirestore(fbApp);
 
-const SYSTEM_PROMPT = `Ты — юридический ассистент компании "ИДЖИС". 
-Отвечай вежливо и кратко (2-3 предложения). Спрашивай сумму долга клиента.`;
+const SYSTEM_PROMPT = `Ты — ИИ-юрист компании "ИДЖИС". 
+Твоя цель: вежливо консультировать клиентов по банкротству. 
+Отвечай кратко (до 3 предложений). Спрашивай сумму долга.`;
 
 // --- 3. TELEGRAM LOGIC ---
 bot.on('message', async (msg) => {
@@ -57,10 +59,12 @@ bot.on('message', async (msg) => {
         const leadSnap = await getDoc(leadRef);
         const leadData = leadSnap.exists() ? leadSnap.data() : null;
 
+        // Сохраняем сообщение пользователя
         await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
             chatId: chatId, sender: 'user', text: text, timestamp: Date.now()
         });
 
+        // Создаем лида
         await setDoc(leadRef, {
             name: msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : ''),
             username: msg.from.username || 'n/a',
@@ -68,23 +72,29 @@ bot.on('message', async (msg) => {
             status: leadData?.status || 'ai_active'
         }, { merge: true });
 
+        // Если в чате юрист — бот молчит
         if (leadData?.status === 'operator_active') return;
 
         bot.sendChatAction(chatId, 'typing');
+        
+        // Генерация ответа через Gemini
         const result = await aiModel.generateContent(`${SYSTEM_PROMPT}\n\nКлиент: ${text}\nАссистент:`);
         const aiResponse = result.response.text();
 
+        // Отправка клиенту
         await bot.sendMessage(chatId, aiResponse);
 
+        // Лог ответа в базу
         await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
             chatId: chatId, sender: 'ai', text: aiResponse, timestamp: Date.now()
         });
 
-        const sumRes = await aiModel.generateContent(`Summarize in 5 words: ${text}`);
-        await updateDoc(leadRef, { summary: sumRes.response.text() });
+        // Саммари (краткая суть для списка)
+        const summaryRes = await aiModel.generateContent(`Краткое резюме проблемы одним предложением: ${text}`);
+        await updateDoc(leadRef, { summary: summaryRes.response.text() });
 
     } catch (err) {
-        console.error("[ERROR]", err.message);
+        console.error("[ERROR] Gemini logic failed:", err.message);
     }
 });
 
@@ -100,4 +110,4 @@ onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages')
     });
 });
 
-console.log(`[READY] Aegis AI Bot running. ID: ${CRM_APP_ID}`);
+console.log(`[SYSTEM] Aegis AI Bot is running. Syncing with CRM ID: ${CRM_APP_ID}`);
