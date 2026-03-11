@@ -8,7 +8,7 @@ import express from 'express';
 
 // --- 1. HEALTH CHECK ---
 const app = express();
-app.get('/', (req, res) => res.send('Aegis Bot (Human Voice Edition): Online'));
+app.get('/', (req, res) => res.send('Aegis Bot (Hyper-Natural Edition): Online'));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`[SYSTEM] Monitoring on port ${PORT}`));
 
@@ -38,24 +38,25 @@ const db = getFirestore(fbApp);
 
 signInAnonymously(auth).catch(e => console.error("Firebase Auth Error:", e));
 
-// --- 3. ГИПЕР-РЕАЛИСТИЧНЫЙ ПРОДАЖНИК ---
-const SYSTEM_PROMPT = `Ты — ведущий эксперт по банкротству. Ты общаешься с клиентом в Telegram как старый знакомый, но профи.
+// --- 3. ЛИЧНОСТЬ "ЖИВОГО АНТОНА" ---
+const SYSTEM_PROMPT = `Ты — Антон, юрист. Ты общаешься с клиентом просто, без официоза, как будто записываешь быстрый войс в пути.
 
-ТВОЙ НОВЫЙ СТИЛЬ:
-- ГОВОРИ КОРОТКО. Одна мысль — одно предложение. Максимум 2 предложения в сообщении.
-- ИСПОЛЬЗУЙ ПАУЗЫ. Пиши "...", "ну...", "смотрите...". Это заставляет голос звучать реально.
-- ОШИБКИ И АКЦЕНТЫ. Если слово сложное, можешь написать его чуть проще, чтобы ИИ не запинался.
-- НИКАКИХ ТЕРРАД. Если клиент спросил про цену, не пиши лекцию. Напиши: "Ну, тут надо считать. Давайте созвонимся?"
+ТВОЙ НОВЫЙ СТИЛЬ (АРТЕФАКТЫ):
+- Используй "ну...", "эээ...", "короче", "слушайте", "в общем".
+- Делай паузы многоточиями: "Ситуация... ну, рабочая в целом".
+- Говори как человек, который думает в процессе речи. 
+- Никаких длинных предложений. Максимум 10-12 слов в фразе.
+- Ты можешь слегка "забыть" термин: "Там этот... как его... закон сто двадцать седьмой".
 
 ВОРОНКА:
-1. Узнай сумму долга (коротко).
-2. Узнай про имущество (коротко).
-3. ПЕРЕХОД НА ГОЛОС. Как только понял ситуацию, используй тег [VOICE].
-   Пример идеального текста для голоса: "[VOICE] Ну... ситуация в целом ясная. Ничего критичного. Давайте я вам сейчас наберу буквально на пару минут? Прикинем цифры. Вам сейчас удобно? Напишите номер."
+1. Сумма долга? (Коротко: "А сколько всего должны? Ну, если всё вместе посчитать?")
+2. Имущество? (Коротко: "Машина, дача есть? Ну, что-то, что жалко потерять?")
+3. ПЕРЕХОД НА ГОЛОС (Обязательно через [VOICE]):
+   Пример: "[VOICE] Слушайте... ну, ситуация понятная. Э-э... ничего сверхъестественного тут нет. Давайте я вам сейчас наберу буквально на пару минут, прикинем варианты? Вам сейчас удобно? Черкните номер."
 
-ВАЖНО: Голос должен звучать как быстрый перехват в мессенджере, а не как записанная реклама.`;
+ВАЖНО: Текст внутри [VOICE] должен быть максимально разговорным, с запинками и паузами. Это "взламывает" мозг клиента, он верит, что это ты.`;
 
-// --- ФУНКЦИЯ ELEVENLABS (НАСТРОЙКА "ЖИВОГО" ГОЛОСА) ---
+// --- ФУНКЦИЯ ELEVENLABS (ТЮНИНГ ПОД АРТЕФАКТЫ) ---
 async function generateVoice(text) {
     const apiKey = process.env.ELEVENLABS_API_KEY;
     const voiceId = process.env.ELEVENLABS_VOICE_ID;
@@ -75,9 +76,9 @@ async function generateVoice(text) {
                 text: text,
                 model_id: "eleven_multilingual_v2",
                 voice_settings: { 
-                    stability: 0.35, // УМЕНЬШИЛИ: Голос станет более эмоциональным и "рваным", как у человека
-                    similarity_boost: 0.8, 
-                    style: 0.45,     // ДОБАВИЛИ: Усиливает характерную манеру речи
+                    stability: 0.32,       // ЕЩЕ НИЖЕ: Голос станет более живым и "неидеальным"
+                    similarity_boost: 0.75, 
+                    style: 0.55,           // ВЫШЕ: Больше характерных черт твоего голоса
                     use_speaker_boost: true
                 }
             })
@@ -106,12 +107,12 @@ bot.on('message', async (msg) => {
     if (text.startsWith('/')) {
         const leadRef = doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId);
         if (text === '/start') {
-            bot.sendMessage(chatId, "Добрый день! Какая у вас сейчас общая сумма по всем кредитам и долгам? Ну, примерно хотя бы.");
+            bot.sendMessage(chatId, "Добрый день! Слушаю вас. Скажите, а какая у вас сейчас общая сумма по всем долгам? Ну, примерно хотя бы.");
             return;
         }
         if (text === '/debug_voice') {
-            bot.sendMessage(chatId, "⏳ Записываю короткое голосовое...");
-            const testVoice = await generateVoice("Ну... привет. Это я, проверяю как звучит голос. Вроде нормально.");
+            bot.sendMessage(chatId, "⏳ Записываю живой войс с артефактами...");
+            const testVoice = await generateVoice("Ну... эээ... привет. Это Антон. Короче, проверяю как звучит голос с паузами. Вроде... вроде живой.");
             if (testVoice) await bot.sendVoice(chatId, testVoice);
             return;
         }
@@ -120,7 +121,7 @@ bot.on('message', async (msg) => {
             const msgsToDelete = allMsgsSnap.docs.filter(d => d.data().chatId === chatId);
             for (const docSnap of msgsToDelete) await deleteDoc(doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages', docSnap.id));
             await setDoc(leadRef, { summary: "", phone: null, status: 'ai_active', updatedAt: Date.now() }, { merge: true });
-            bot.sendMessage(chatId, "✨ Начнем сначала.");
+            bot.sendMessage(chatId, "🔄 Сбросил. Давай заново.");
             return;
         }
         return;
@@ -180,7 +181,7 @@ bot.on('message', async (msg) => {
         const textToProcess = aiResponse.replace('[VOICE]', '').trim();
         bot.sendChatAction(chatId, isVoiceMsg ? 'record_voice' : 'typing');
         
-        const delay = Math.min(Math.max(textToProcess.length * 90, 3000), 10000); // Чуть медленнее печатает
+        const delay = Math.min(Math.max(textToProcess.length * 100, 3500), 12000); 
         await new Promise(r => setTimeout(r, delay));
 
         if (isVoiceMsg) {
@@ -206,7 +207,7 @@ bot.on('message', async (msg) => {
         try {
             const userTexts = chatHistory.filter(m => m.sender === 'user').map(m => m.text).join('. ');
             const sumComp = await openai.chat.completions.create({
-                messages: [{ role: "user", content: `Сделай выжимку до 50 слов: ${userTexts}` }],
+                messages: [{ role: "user", content: `Выжимка: ${userTexts}` }],
                 model: "deepseek-chat",
             });
             await updateDoc(leadRef, { summary: sumComp.choices[0].message.content });
