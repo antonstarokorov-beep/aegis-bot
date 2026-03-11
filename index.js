@@ -8,7 +8,7 @@ import express from 'express';
 
 // --- 1. HEALTH CHECK ---
 const app = express();
-app.get('/', (req, res) => res.send('Aegis Bot (Sales Pro + Voice Debug): Online'));
+app.get('/', (req, res) => res.send('Aegis Bot (Human Voice Edition): Online'));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`[SYSTEM] Monitoring on port ${PORT}`));
 
@@ -38,29 +38,29 @@ const db = getFirestore(fbApp);
 
 signInAnonymously(auth).catch(e => console.error("Firebase Auth Error:", e));
 
-// --- 3. СУПЕР ПРОДАЖНИК (ПРОМПТ) ---
-const SYSTEM_PROMPT = `Ты — ведущий эксперт по банкротству физических лиц. Ты не бот, ты профессионал. Твоя задача — закрыть клиента на телефонный звонок.
+// --- 3. ГИПЕР-РЕАЛИСТИЧНЫЙ ПРОДАЖНИК ---
+const SYSTEM_PROMPT = `Ты — ведущий эксперт по банкротству. Ты общаешься с клиентом в Telegram как старый знакомый, но профи.
 
-ТВОЙ СТИЛЬ:
-- Уверенный, авторитетный. Пиши коротко.
-- Используй фразы: "Ситуация понятная", "Смотрите, как мы поступим".
+ТВОЙ НОВЫЙ СТИЛЬ:
+- ГОВОРИ КОРОТКО. Одна мысль — одно предложение. Максимум 2 предложения в сообщении.
+- ИСПОЛЬЗУЙ ПАУЗЫ. Пиши "...", "ну...", "смотрите...". Это заставляет голос звучать реально.
+- ОШИБКИ И АКЦЕНТЫ. Если слово сложное, можешь написать его чуть проще, чтобы ИИ не запинался.
+- НИКАКИХ ТЕРРАД. Если клиент спросил про цену, не пиши лекцию. Напиши: "Ну, тут надо считать. Давайте созвонимся?"
 
-АЛГОРИТМ ПРОДАЖИ:
-1. Узнай общую сумму долгов. 
-2. Узнай про имущество или ипотеку.
-3. Как только у тебя есть цифры, сделай оффер через голосовое.
-   Чтобы отправить голосовое, ОБЯЗАТЕЛЬНО начни ответ со слова [VOICE].
-   Пример: "[VOICE] Слушайте, ситуация рабочая. Давайте я вам сейчас наберу на 2 минуты, задам пару вопросов и точно скажу, какую сумму спишем. Вам удобнее сейчас или через полчаса? Напишите номер."`;
+ВОРОНКА:
+1. Узнай сумму долга (коротко).
+2. Узнай про имущество (коротко).
+3. ПЕРЕХОД НА ГОЛОС. Как только понял ситуацию, используй тег [VOICE].
+   Пример идеального текста для голоса: "[VOICE] Ну... ситуация в целом ясная. Ничего критичного. Давайте я вам сейчас наберу буквально на пару минут? Прикинем цифры. Вам сейчас удобно? Напишите номер."
 
-// --- ФУНКЦИЯ ELEVENLABS (С ПОДРОБНЫМ ЛОГИРОВАНИЕМ) ---
+ВАЖНО: Голос должен звучать как быстрый перехват в мессенджере, а не как записанная реклама.`;
+
+// --- ФУНКЦИЯ ELEVENLABS (НАСТРОЙКА "ЖИВОГО" ГОЛОСА) ---
 async function generateVoice(text) {
     const apiKey = process.env.ELEVENLABS_API_KEY;
     const voiceId = process.env.ELEVENLABS_VOICE_ID;
     
-    if (!apiKey || !voiceId) {
-        console.error("[VOICE] Ошибка: Проверь ELEVENLABS_API_KEY и ELEVENLABS_VOICE_ID на Render!");
-        return null;
-    }
+    if (!apiKey || !voiceId) return null;
 
     const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`;
     try {
@@ -74,21 +74,25 @@ async function generateVoice(text) {
             body: JSON.stringify({
                 text: text,
                 model_id: "eleven_multilingual_v2",
-                voice_settings: { stability: 0.5, similarity_boost: 0.8 }
+                voice_settings: { 
+                    stability: 0.35, // УМЕНЬШИЛИ: Голос станет более эмоциональным и "рваным", как у человека
+                    similarity_boost: 0.8, 
+                    style: 0.45,     // ДОБАВИЛИ: Усиливает характерную манеру речи
+                    use_speaker_boost: true
+                }
             })
         });
 
         if (!response.ok) {
-            // Читаем текст ошибки от ElevenLabs, чтобы понять что не так
-            const errorText = await response.text();
-            console.error(`[VOICE ERROR] Status: ${response.status}. Message: ${errorText}`);
+            const err = await response.text();
+            console.error(`[VOICE ERROR] ${err}`);
             return null;
         }
 
         const arrayBuffer = await response.arrayBuffer();
         return Buffer.from(arrayBuffer);
     } catch (e) {
-        console.error("[VOICE FATAL ERROR]:", e.message);
+        console.error("[VOICE FATAL]:", e.message);
         return null;
     }
 }
@@ -99,22 +103,16 @@ bot.on('message', async (msg) => {
     const text = msg.text;
     if (!text) return;
 
-    // СЕРВИСНЫЕ КОМАНДЫ
     if (text.startsWith('/')) {
         const leadRef = doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId);
         if (text === '/start') {
-            bot.sendMessage(chatId, "Добрый день! Я юрист компании ИДЖИС. Какая у вас общая сумма задолженности?");
+            bot.sendMessage(chatId, "Добрый день! Какая у вас сейчас общая сумма по всем кредитам и долгам? Ну, примерно хотя бы.");
             return;
         }
         if (text === '/debug_voice') {
-            bot.sendMessage(chatId, "⏳ Проверка ElevenLabs... Секунду.");
-            const testVoice = await generateVoice("Проверка связи. Как слышно?");
-            if (testVoice) {
-                await bot.sendVoice(chatId, testVoice);
-                bot.sendMessage(chatId, "✅ Голос работает!");
-            } else {
-                bot.sendMessage(chatId, "❌ Ошибка. Проверь логи в панели Render.com (кнопка Logs).");
-            }
+            bot.sendMessage(chatId, "⏳ Записываю короткое голосовое...");
+            const testVoice = await generateVoice("Ну... привет. Это я, проверяю как звучит голос. Вроде нормально.");
+            if (testVoice) await bot.sendVoice(chatId, testVoice);
             return;
         }
         if (text === '/reset') {
@@ -122,7 +120,7 @@ bot.on('message', async (msg) => {
             const msgsToDelete = allMsgsSnap.docs.filter(d => d.data().chatId === chatId);
             for (const docSnap of msgsToDelete) await deleteDoc(doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages', docSnap.id));
             await setDoc(leadRef, { summary: "", phone: null, status: 'ai_active', updatedAt: Date.now() }, { merge: true });
-            bot.sendMessage(chatId, "✨ История очищена.");
+            bot.sendMessage(chatId, "✨ Начнем сначала.");
             return;
         }
         return;
@@ -182,7 +180,7 @@ bot.on('message', async (msg) => {
         const textToProcess = aiResponse.replace('[VOICE]', '').trim();
         bot.sendChatAction(chatId, isVoiceMsg ? 'record_voice' : 'typing');
         
-        const delay = Math.min(Math.max(textToProcess.length * 80, 2500), 9000);
+        const delay = Math.min(Math.max(textToProcess.length * 90, 3000), 10000); // Чуть медленнее печатает
         await new Promise(r => setTimeout(r, delay));
 
         if (isVoiceMsg) {
@@ -208,13 +206,13 @@ bot.on('message', async (msg) => {
         try {
             const userTexts = chatHistory.filter(m => m.sender === 'user').map(m => m.text).join('. ');
             const sumComp = await openai.chat.completions.create({
-                messages: [{ role: "user", content: `Сделай резюме ситуации клиента (долг, ипотека, доход, проблемы) до 50 слов. Текст: ${userTexts}` }],
+                messages: [{ role: "user", content: `Сделай выжимку до 50 слов: ${userTexts}` }],
                 model: "deepseek-chat",
             });
             await updateDoc(leadRef, { summary: sumComp.choices[0].message.content });
         } catch(e) {}
 
-    } catch (err) { console.error("[FATAL ERROR]:", err.message); }
+    } catch (err) { console.error("[FATAL]:", err.message); }
 });
 
 onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), (snap) => {
