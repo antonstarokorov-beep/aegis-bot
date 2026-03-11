@@ -27,8 +27,8 @@ bot.on('polling_error', (err) => {
 });
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-// ИСПРАВЛЕНИЕ 404: Добавлено "-latest" к названию модели
-const aiModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash-latest" });
+// ИСПРАВЛЕНИЕ 404: Используем самую базовую модель, доступную для всех ключей
+const aiModel = genAI.getGenerativeModel({ model: "gemini-pro" });
 
 const fbConfig = {
     apiKey: process.env.FIREBASE_API_KEY,
