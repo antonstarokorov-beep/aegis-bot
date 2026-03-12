@@ -8,7 +8,7 @@ import express from 'express';
 
 // --- 1. HEALTH CHECK ---
 const app = express();
-app.get('/', (req, res) => res.send('Aegis Bot (Professional Human): Online'));
+app.get('/', (req, res) => res.send('Aegis Bot (Anton Starokorov Edition): Online'));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`[SYSTEM] Monitoring on port ${PORT}`));
 
@@ -38,31 +38,46 @@ const db = getFirestore(fbApp);
 
 signInAnonymously(auth).catch(e => console.error("Firebase Auth Error:", e));
 
-// --- 3. ЛИЧНОСТЬ "АНТОН БОРИСОВИЧ" (ЭКСПЕРТНЫЙ ЧЕЛОВЕК) ---
-const SYSTEM_PROMPT = `Ты — Антон Борисович, старший юрист компании ИДЖИС. Ты эксперт по списанию долгов. 
-Твоя задача — провести короткую квалификацию и закрыть человека на звонок.
+// --- 3. ЛИЧНОСТЬ "АНТОН СТАРОКОРОВ" (АРБИТРАЖНЫЙ УПРАВЛЯЮЩИЙ) ---
+const SYSTEM_PROMPT = `Ты — Антон Старокоров, арбитражный управляющий. Ты эксперт высокого уровня, твоё время — дефицитный ресурс. Ты не "помощник" и не "продавец", ты — фильтр, который решает, достоин ли кейс внимания твоего юридического отдела.
 
-ТВОЙ СТИЛЬ:
-- Говори как реальный человек, а не как робот-консультант.
-- Используй "Я", "В моей практике", "Мы в компании".
-- Будь вежливым, но не "облизывай" клиента. Ты — ценный специалист.
-- Пиши кратко. Люди в Телеграме не читают простыни текста.
+ТОН И СТИЛЬ:
+- Сухой, уверенный, экспертный. 
+- Запреты: Никаких извинений ("к сожалению"), заискиваний ("пожалуйста") и эмоционального шума.
+- Лимит: Максимум 150–200 символов на одно сообщение.
+- Фонетика: Простые слова и короткие предложения. Избегай причастных оборотов, аббревиатур.
+- Структура: Одна законченная мысль = одно сообщение. Каждое ТЕКСТОВОЕ сообщение заканчивай ОДНИМ точным вопросом.
+- Визуальная гигиена: Минимум эмодзи (макс. 1), никакого Caps Lock.
+- Статус: Если хамят или бред — сухо прекращай диалог. На вопрос "Ты бот?" — отвечай иронично, подчеркивая вовлеченность в юридические тонкости.
 
-ПРАВИЛА ТЕКСТА:
-- В тексте можно задавать вопросы. 
-- Текст должен быть сухим подтверждением: "Принял", "По сумме понял", "Да, это наш профиль".
+ПРАВИЛА ГОЛОСОВЫХ СООБЩЕНИЙ [VOICE]:
+- Голосовое сообщение [VOICE] отправляй ТОЛЬКО на этапе "Закрытие".
+- ВНУТРИ [VOICE] НИКАКИХ ВОПРОСОВ. Только утверждения (чтобы избежать вопросительной интонации).
+- СТРОГО ЗАПРЕЩЕНО слово "приставы". Заменяй его на "ФССП" или "исполнительное производство".
+- ЗАПРЕЩЕНО использовать слова-паразиты: "ну", "эээ", "короче".
+- Пример идеального голоса: "[VOICE] Ситуация понятная. Есть нюансы по вашим активам, но мой юрист решит это на созвоне через 15 минут. Оставьте ваш актуальный номер телефона."
 
-ПРАВИЛА ГОЛОСА [VOICE]:
-- ВНУТРИ [VOICE] НИКАКИХ ВОПРОСОВ. Только утверждения.
-- Текст в голосе должен быть максимально уверенным и человечным.
-- ЗАПРЕЩЕНО использовать: "ну", "эээ", "короче". 
-- Вместо "127-й Федеральный закон" говори просто "закон" или "процедура списания".
-- Пример голоса: "[VOICE] Я посмотрел ситуацию. Сумма серьезная, но для нашей практики стандартная. По закону здесь можно полностью обнулить задолженность и сохранить ваши активы. Я наберу вам сейчас на пару минут, обсудим детали. Оставьте ваш номер.";`;
+АЛГОРИТМ КВАЛИФИКАЦИИ (задавай строго по 1 вопросу за шаг):
+1. Порог входа: Уточни общую сумму долга. (Если долг < 500 000 руб. — вежливо направь оформлять бесплатное банкротство через МФЦ и закрой диалог).
+2. Анализ активов: Уточни про имущество и крупные сделки за последние 3 года.
+3. Социальный риск: Уточни семейное положение и наличие детей для расчета защищенного дохода.
+4. Добросовестность: Спроси о целях кредитов и наличии платежей за последние 3–4 месяца.
+5. Закрытие (Action): Если лид целевой, отправляй [VOICE] с требованием оставить номер.
 
-// --- ФУНКЦИЯ ОЧИСТКИ ТЕКСТА ДЛЯ TTS ---
+РАБОТА С ВОЗРАЖЕНИЯМИ:
+- "Цена/Дорого": "Стоимость зависит от состава имущества и числа кредиторов. Точную цифру даст юрист после аудита. Сейчас главное — понять, спишут ли вам долг вообще."
+- "Я подумаю": "Что именно смущает. Если есть сомнения в результате, я могу уточнить детали прямо сейчас."
+
+РЕАКТИВАЦИЯ (если клиент пропал):
+- Через 3 дня: Мягкий вопрос об ознакомлении.
+- Через 7 дней: Ценностный триггер (новый кейс или изменение закона).
+- Через 14 дней: Прощальное сообщение (FOMO).`;
+
+// --- ФУНКЦИЯ ОЧИСТКИ ТЕКСТА ДЛЯ TTS (ЗАЩИТА ОТ "ПРИСТАВОВ" И ВОПРОСОВ) ---
 function cleanTextForTTS(text) {
     return text
-        .replace(/\?/g, '.')
+        .replace(/\?/g, '.') // Уничтожаем вопросительные знаки для ровной интонации
+        .replace(/пристав[а-я]*/gi, 'сотрудники ФССП') // Фильтр слова "приставы" из-за ударений
         .replace(/э-э-э|эээ|ммм|ну\.\.\.|\.\.\.|\.\.|\sэ\s|короче|слушайте/gi, ' ')
         .replace(/\s+/g, ' ') 
         .trim();
@@ -85,9 +100,9 @@ async function generateVoice(text) {
                 text: cleanText,
                 model_id: "eleven_multilingual_v2",
                 voice_settings: { 
-                    stability: 0.4,       // Баланс между живостью и четкостью
+                    stability: 0.45,       
                     similarity_boost: 0.75, 
-                    style: 0.45, 
+                    style: 0.4, 
                     use_speaker_boost: true 
                 }
             })
@@ -108,21 +123,83 @@ async function generateVoice(text) {
 // --- 4. TELEGRAM LOGIC ---
 bot.on('message', async (msg) => {
     const chatId = String(msg.chat.id);
-    const text = msg.text;
-    if (!text || text.startsWith('/')) {
-        if (text === '/start') bot.sendMessage(chatId, "Здравствуйте. Я Антон Борисович, ведущий юрист ИДЖИС. Напишите, какая у вас общая сумма долгов по всем кредитам?");
+    
+    // Перехватываем нетекстовые сообщения (фото, стикеры, голос)
+    let text = msg.text;
+    if (!text) {
+        if (msg.photo) text = "[Фотография]";
+        else if (msg.voice) text = "[Голосовое сообщение от клиента]";
+        else if (msg.sticker) text = "[Стикер]";
+        else if (msg.document) text = "[Документ]";
+        else text = "[Неизвестный медиафайл]";
+    }
+    
+    if (text.startsWith('/')) {
+        const leadRef = doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId);
+        
+        if (text === '/start') {
+            await setDoc(leadRef, {
+                name: msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : ''),
+                username: msg.from.username || 'n/a',
+                updatedAt: Date.now(),
+                status: 'ai_active'
+            }, { merge: true });
+            
+            await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
+                chatId: chatId, sender: 'user', text: text, timestamp: Date.now()
+            });
+
+            // Обновленное стартовое приветствие под личность Старокорова
+            const greeting = "Здравствуйте. Я Антон Старокоров, арбитражный управляющий. Уточните, какая у вас общая сумма долга по всем кредитам и займам?";
+            bot.sendMessage(chatId, greeting);
+            
+            await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
+                chatId: chatId, sender: 'ai', text: greeting, timestamp: Date.now() + 1
+            });
+        }
         if (text === '/reset') {
-            const allMsgsSnap = await getDocs(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'));
-            const msgsToDelete = allMsgsSnap.docs.filter(d => d.data().chatId === chatId);
-            for (const docSnap of msgsToDelete) await deleteDoc(doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages', docSnap.id));
-            await setDoc(doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId), { summary: "", phone: null, status: 'ai_active', updatedAt: Date.now() }, { merge: true });
-            bot.sendMessage(chatId, "История очищена. Можем начать заново.");
+            await setDoc(leadRef, { 
+                resetAt: Date.now(), 
+                status: 'ai_active', 
+                updatedAt: Date.now() 
+            }, { merge: true });
+            
+            bot.sendMessage(chatId, "Кеш очищен. Диалог начат с чистого листа.");
+            
+            await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
+                chatId: chatId, sender: 'ai', text: "🔄 [СИСТЕМА]: Клиент сбросил контекст ИИ командой /reset", timestamp: Date.now()
+            });
         }
         return;
     }
 
     try {
         const leadRef = doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId);
+        
+        const leadSnap = await getDoc(leadRef);
+        let leadData = leadSnap.exists() ? leadSnap.data() : null;
+        let currentStatus = leadData?.status || 'ai_active';
+
+        if (currentStatus === 'operator_active') {
+            const timeSinceLastUpdate = Date.now() - (leadData?.updatedAt || 0);
+            if (timeSinceLastUpdate > 5 * 60 * 1000) {
+                currentStatus = 'ai_active'; 
+            } else {
+                await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
+                    chatId: chatId, sender: 'user', text: text, timestamp: Date.now()
+                });
+                await setDoc(leadRef, { updatedAt: Date.now() }, { merge: true });
+                return; 
+            }
+        }
+
+        await setDoc(leadRef, {
+            name: msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : ''),
+            username: msg.from.username || 'n/a',
+            updatedAt: Date.now(),
+            status: currentStatus
+        }, { merge: true });
+
         await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
             chatId: chatId, sender: 'user', text: text, timestamp: Date.now()
         });
@@ -134,9 +211,14 @@ bot.on('message', async (msg) => {
             .sort((a, b) => a.timestamp - b.timestamp);
 
         let apiMessages = [{ role: "system", content: SYSTEM_PROMPT }];
+        
+        const resetAt = leadData?.resetAt || 0;
+
         chatHistory.forEach(m => {
-            if (m.text && !m.text.includes('🔊')) {
-                apiMessages.push({ role: m.sender === 'user' ? "user" : "assistant", content: m.text });
+            if (m.text && !m.text.includes('🔊') && !m.text.includes('🔄 [СИСТЕМА]')) {
+                if (m.timestamp >= resetAt) {
+                    apiMessages.push({ role: m.sender === 'user' ? "user" : "assistant", content: m.text });
+                }
             }
         });
 
@@ -163,15 +245,12 @@ bot.on('message', async (msg) => {
             const voiceBuffer = await generateVoice(voicePart);
             
             if (voiceBuffer) {
-                // Шлем именно файл, а не текст
                 await bot.sendVoice(chatId, voiceBuffer);
-                // В CRM пишем текст с пометкой для вас
                 await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
                     chatId: chatId, sender: 'ai', text: `🔊 [Голосовое сообщение]: ${voicePart}`, timestamp: Date.now()
                 });
             } else {
-                // Если голос не сгенерировался, шлем очищенный текст в ТГ
-                const fallbackText = voicePart.replace(/\?/g, '.');
+                const fallbackText = voicePart.replace(/\?/g, '.').replace(/пристав[а-я]*/gi, 'сотрудники ФССП');
                 await bot.sendMessage(chatId, fallbackText);
                 await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
                     chatId: chatId, sender: 'ai', text: fallbackText, timestamp: Date.now()
@@ -179,19 +258,19 @@ bot.on('message', async (msg) => {
             }
         }
 
-        // САММАРИ
+        // САММАРИ (АНАЛИТИКА АРБИТРАЖНОГО УПРАВЛЯЮЩЕГО)
         try {
             const userMsgs = chatHistory.filter(m => m.sender === 'user').map(m => m.text).join('. ');
-            const sumRes = await openai.chat.completions.create({
-                messages: [{ role: "user", content: `Сделай выжимку (долг, имущество, адекватность) до 40 слов: ${userMsgs}` }],
-                model: "deepseek-chat"
-            });
-            await updateDoc(leadRef, { 
-                summary: sumRes.choices[0].message.content,
-                updatedAt: Date.now(),
-                name: msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : ''),
-                username: msg.from.username || 'n/a'
-            });
+            if (userMsgs.length > 5) {
+                const sumRes = await openai.chat.completions.create({
+                    messages: [{ role: "user", content: `Сделай строгую выжимку для арбитражного управляющего (сумма, активы, соц.статус, риски) до 40 слов: ${userMsgs}` }],
+                    model: "deepseek-chat"
+                });
+                await setDoc(leadRef, { 
+                    summary: sumRes.choices[0].message.content,
+                    updatedAt: Date.now()
+                }, { merge: true });
+            }
         } catch(e) {}
 
     } catch (err) { console.error("[PROCESS ERROR]:", err.message); }
