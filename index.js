@@ -102,7 +102,6 @@ bot.on('message', async (msg) => {
         const leadSnap = await getDoc(leadRef);
         let leadData = leadSnap.exists() ? leadSnap.data() : null;
 
-        // ИСПРАВЛЕНИЕ: Сначала проверяем команды! Чтобы /reset пробивал любую блокировку.
         if (text.startsWith('/')) {
             if (text === '/start') {
                 await setDoc(leadRef, { name: msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : ''), username: msg.from.username || 'n/a', updatedAt: Date.now(), status: 'ai_active' }, { merge: true });
@@ -115,7 +114,6 @@ bot.on('message', async (msg) => {
             return;
         }
 
-        // А УЖЕ ЗАТЕМ проверяем, не заблокирован ли пользователь
         if (leadData?.status === 'closed') {
             console.log(`[IGNORE] User ${chatId} is in CLOSED status.`);
             return;
@@ -197,8 +195,3 @@ onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages')
         }
     });
 });
-'@
-
-git add index.js
-git commit -m "fix: moved commands above ban check to allow reset"
-git push origin main
