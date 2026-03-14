@@ -1,3 +1,4 @@
+Set-Content -Path "index.js" -Encoding UTF8 -Value @'
 import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import OpenAI from 'openai';
@@ -11,14 +12,12 @@ const app = express();
 app.get('/', (req, res) => res.send('Aegis Bot (Stable Edition): Online'));
 const PORT = process.env.PORT || 10000;
 
-// ИСПРАВЛЕНИЕ 1: Жесткая привязка к 0.0.0.0 (Открываем порт наружу для Render и UptimeRobot)
 app.listen(PORT, '0.0.0.0', () => console.log(`[SYSTEM] Monitoring active on 0.0.0.0:${PORT}`));
 
 // --- 2. CONFIG ---
 const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || 'aegis-leads-app';
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-// ИСПРАВЛЕНИЕ 2: Анти-краш система. Ловит сетевые ошибки Telegram и не дает Node.js упасть.
 bot.on('polling_error', (error) => {
     console.error(`[POLLING ERROR] ${error.code}: ${error.message}`);
 });
@@ -104,6 +103,20 @@ bot.on('message', async (msg) => {
         const leadSnap = await getDoc(leadRef);
         let leadData = leadSnap.exists() ? leadSnap.data() : null;
 
+        // ИСПРАВЛЕНИЕ: Сначала проверяем команды! Чтобы /reset пробивал любую блокировку.
+        if (text.startsWith('/')) {
+            if (text === '/start') {
+                await setDoc(leadRef, { name: msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : ''), username: msg.from.username || 'n/a', updatedAt: Date.now(), status: 'ai_active' }, { merge: true });
+                bot.sendMessage(chatId, "Здравствуйте. Я Антон Старокоров, арбитражный управляющий. Уточните вашу общую сумму долга?");
+            }
+            if (text === '/reset') {
+                await setDoc(leadRef, { resetAt: Date.now(), status: 'ai_active', updatedAt: Date.now() }, { merge: true });
+                bot.sendMessage(chatId, "Память ИИ очищена. Блокировки сняты. Можем продолжать.");
+            }
+            return;
+        }
+
+        // А УЖЕ ЗАТЕМ проверяем, не заблокирован ли пользователь
         if (leadData?.status === 'closed') {
             console.log(`[IGNORE] User ${chatId} is in CLOSED status.`);
             return;
@@ -112,18 +125,6 @@ bot.on('message', async (msg) => {
         const configRef = doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'config', 'bot_settings');
         const configSnap = await getDoc(configRef);
         const dynamicInstructions = configSnap.exists() ? configSnap.data().instructions : "";
-
-        if (text.startsWith('/')) {
-            if (text === '/start') {
-                await setDoc(leadRef, { name: msg.from.first_name + (msg.from.last_name ? ' ' + msg.from.last_name : ''), username: msg.from.username || 'n/a', updatedAt: Date.now(), status: 'ai_active' }, { merge: true });
-                bot.sendMessage(chatId, "Здравствуйте. Я Антон Старокоров, арбитражный управляющий. Уточните вашу общую сумму долга?");
-            }
-            if (text === '/reset') {
-                await setDoc(leadRef, { resetAt: Date.now(), status: 'ai_active', updatedAt: Date.now() }, { merge: true });
-                bot.sendMessage(chatId, "Память ИИ очищена. Можем продолжать.");
-            }
-            return;
-        }
 
         if (leadData?.status === 'operator_active' && (Date.now() - (leadData?.updatedAt || 0) < 5 * 60 * 1000)) {
             console.log(`[IGNORE] Operator is active for ${chatId}`);
@@ -197,3 +198,8 @@ onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages')
         }
     });
 });
+'@
+
+git add index.js
+git commit -m "fix: moved commands above ban check to allow reset"
+git push origin main
