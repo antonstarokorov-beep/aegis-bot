@@ -1,10 +1,9 @@
-Set-Content -Path "index.js" -Encoding UTF8 -Value @'
 import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import OpenAI from 'openai';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
-import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc, onSnapshot, getDocs, deleteDoc } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc, onSnapshot, getDocs } from 'firebase/firestore';
 import express from 'express';
 
 const app = express();
@@ -191,8 +190,3 @@ onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages')
         }
     });
 });
-'@
-
-git add index.js
-git commit -m "fix: indestructible bot version with error handling"
-git push origin main
