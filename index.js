@@ -1,4 +1,3 @@
-Set-Content -Path "index.js" -Encoding UTF8 -Value @'
 import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import OpenAI from 'openai';
