@@ -1,3 +1,4 @@
+Set-Content -Path "index.js" -Encoding UTF8 -Value @'
 import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import OpenAI from 'openai';
@@ -6,13 +7,22 @@ import { getAuth, signInAnonymously } from 'firebase/auth';
 import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc, onSnapshot, getDocs } from 'firebase/firestore';
 import express from 'express';
 
+// --- 1. HEALTH CHECK & EXPRESS SERVER ---
 const app = express();
 app.get('/', (req, res) => res.send('Aegis Bot (Stable Edition): Online'));
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`[SYSTEM] Monitoring on port ${PORT}`));
 
+// ИСПРАВЛЕНИЕ 1: Жесткая привязка к 0.0.0.0 (Открываем порт наружу для Render и UptimeRobot)
+app.listen(PORT, '0.0.0.0', () => console.log(`[SYSTEM] Monitoring active on 0.0.0.0:${PORT}`));
+
+// --- 2. CONFIG ---
 const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || 'aegis-leads-app';
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
+
+// ИСПРАВЛЕНИЕ 2: Анти-краш система. Ловит сетевые ошибки Telegram и не дает Node.js упасть.
+bot.on('polling_error', (error) => {
+    console.error(`[POLLING ERROR] ${error.code}: ${error.message}`);
+});
 
 const openai = new OpenAI({
     baseURL: 'https://api.deepseek.com/v1', 
@@ -95,7 +105,6 @@ bot.on('message', async (msg) => {
         const leadSnap = await getDoc(leadRef);
         let leadData = leadSnap.exists() ? leadSnap.data() : null;
 
-        // ЛОГ ПРИЧИНЫ МОЛЧАНИЯ
         if (leadData?.status === 'closed') {
             console.log(`[IGNORE] User ${chatId} is in CLOSED status.`);
             return;
@@ -169,7 +178,6 @@ bot.on('message', async (msg) => {
                 await bot.sendVoice(chatId, voiceBuffer);
                 await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), { chatId: chatId, sender: 'ai', text: `🔊 [Голос]: ${voicePart}`, timestamp: Date.now() });
             } else {
-                // Если голос не создался - просто логируем в CRM
                 await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), { chatId: chatId, sender: 'ai', text: `⚠️ [ОШИБКА ГОЛОСА]: ${voicePart}`, timestamp: Date.now() });
             }
         }
@@ -190,3 +198,8 @@ onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages')
         }
     });
 });
+'@
+
+git add index.js
+git commit -m "fix: binding 0.0.0.0 for UptimeRobot and anti-crash for Telegram polling"
+git push origin main
