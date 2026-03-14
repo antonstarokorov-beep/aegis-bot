@@ -1,4 +1,3 @@
-Set-Content -Path "index.js" -Encoding UTF8 -Value @'
 import 'dotenv/config';
 import TelegramBot from 'node-telegram-bot-api';
 import OpenAI from 'openai';
@@ -198,8 +197,3 @@ onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages')
         }
     });
 });
-'@
-
-git add index.js
-git commit -m "fix: binding 0.0.0.0 for UptimeRobot and anti-crash for Telegram polling"
-git push origin main
