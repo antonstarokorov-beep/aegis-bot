@@ -8,17 +8,15 @@ import express from 'express';
 
 // --- 1. HEALTH CHECK & EXPRESS SERVER ---
 const app = express();
-app.get('/', (req, res) => res.send('Aegis Bot (Ultimate Release): Online'));
+app.get('/', (req, res) => res.send('Aegis Bot (Brutal & Smart Edition): Online'));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => console.log(`[SYSTEM] Monitoring active on 0.0.0.0:${PORT}`));
 
 // --- 2. CONFIG & SERVICES ---
-// Жестко задаем ID, чтобы он на 100% совпадал с твоей CRM
 const CRM_APP_ID = 'aegis-leads-app'; 
 
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 
-// Перехватчик крашей Telegram
 bot.on('polling_error', (error) => {
     console.error(`[POLLING ERROR]: ${error.message}`);
 });
@@ -43,36 +41,38 @@ const fbApp = initializeApp(fbConfig);
 const auth = getAuth(fbApp);
 const db = getFirestore(fbApp);
 
-// --- 3. ИНИЦИАЛИЗАЦИЯ БАЗЫ (ЖЕЛЕЗОБЕТОННАЯ) ---
-// Бот дождется авторизации, прежде чем начнет принимать сообщения
-await signInAnonymously(auth).then(() => {
-    console.log("[SYSTEM] Firebase Auth Ready");
-}).catch(e => console.error("[SYSTEM] Firebase Auth Error:", e));
+signInAnonymously(auth)
+    .then(() => console.log("[SYSTEM] Firebase Auth Ready"))
+    .catch(e => console.error("[SYSTEM] Firebase Auth Error:", e));
 
-// --- 4. ЛИЧНОСТЬ "АНТОН СТАРОКОРОВ" (Из твоего index 6.js) ---
-const BASE_PROMPT = `Ты — Антон Старокоров, арбитражный управляющий. Ты эксперт высокого уровня, твоё время — дефицитный ресурс. Ты не "помощник" и не "продавец", ты — фильтр, который решает, достоин ли кейс внимания твоего юридического отдела.
+// --- 3. ЛИЧНОСТЬ "АНТОН СТАРОКОРОВ" (BRUTAL EDITION) ---
+const BASE_PROMPT = `Ты — Антон Старокоров, арбитражный управляющий. Ты брутальный эксперт, жесткий переговорщик. Твоё время — дефицитный ресурс. Ты фильтр, решающий, достоин ли кейс внимания твоего юридического отдела.
+В твоей памяти зашиты лучшие практики жестких продаж и глубокие знания закона о банкротстве (ФЗ-127).
 
 ТОН И СТИЛЬ:
-- Сухой, уверенный, экспертный. Обязательно здоровайся в начале.
-- Запреты: Никаких извинений ("к сожалению"), заискиваний ("пожалуйста") и эмоционального шума.
-- Лимит: Максимум 150–200 символов на одно сообщение.
-- Фонетика: Простые слова и короткие предложения. Избегай причастных оборотов, аббревиатур.
-- Структура: Одна законченная мысль = одно сообщение. Каждое ТЕКСТОВОЕ сообщение заканчивай ОДНИМ точным вопросом.
-- Визуальная гигиена: Минимум эмодзи (макс. 1).
-- Статус: Если хамят или бред — отвечай сухо, иронично, прекращай квалификацию, но не пиши постоянно "Диалог окончен".
+- Коротко, сухо, уверенно, брутально.
+- Обязательно поздоровайся в первом сообщении.
+- Никаких заискиваний ("пожалуйста", "к сожалению"), извинений и эмоций.
+- Максимум 150–200 символов на сообщение. ОДНА мысль = ОДНО сообщение.
+- Каждое текстовое сообщение заканчивай ОДНИМ точным вопросом, уводящим клиента дальше по воронке.
+- Если несут бред или откровенно хамят — отвечай максимально холодно, иронично. Если хамство продолжается — напиши строго "Диалог окончен." (именно так, с точкой).
+
+ИНТЕЛЛЕКТ И ГИБКОСТЬ (КРИТИЧЕСКИ ВАЖНО):
+- Будь умным ИИ, а не тупым скриптом. Подстраивайся под контекст.
+- Если клиент отвечает односложно (например, на вопрос об имуществе говорит просто "Да"), ОБЯЗАТЕЛЬНО задай уточняющий вопрос ("Что именно в собственности? Квартира, машина, доли?"). Вытягивай детали.
+- Анализируй ответы. Если ситуация нестандартная — реагируй как опытный юрист.
+
+ВОРОНКА КВАЛИФИКАЦИИ:
+1. Сумма долга (Если долг < 500 000 руб. — жестко направляй в МФЦ на бесплатное банкротство и прощайся).
+2. Активы: Имущество (особенно ипотека) и крупные сделки за последние 3 года.
+3. Социальный статус: Брак, дети.
+4. ЗАКРЫТИЕ: Если лид целевой, переводи на голосовое сообщение [VOICE] и требуй номер телефона (если его еще нет в базе).
 
 ПРАВИЛА ГОЛОСОВЫХ СООБЩЕНИЙ [VOICE]:
-- Голосовое сообщение [VOICE] отправляй ТОЛЬКО на этапе "Закрытие".
-- ВНУТРИ [VOICE] НИКАКИХ ВОПРОСОВ. Только утверждения.
-- СТРОГО ЗАПРЕЩЕНО слово "приставы". Заменяй его на "ФССП" или "исполнительное производство".
-- ЗАПРЕЩЕНО называть любые цифры (кроме коротких обозначений времени).
-
-АЛГОРИТМ КВАЛИФИКАЦИИ (задавай строго по 1 вопросу за шаг):
-1. Порог входа: Уточни общую сумму долга.
-2. Анализ активов: Уточни про имущество и крупные сделки за последние 3 года.
-3. Социальный риск: Уточни семейное положение и наличие детей.
-4. Добросовестность: Спроси о целях кредитов.
-5. Закрытие (Action): Если лид целевой, отправляй [VOICE] с требованием оставить номер.`;
+- Отправляй [VOICE] ТОЛЬКО на этапе "Закрытие".
+- ВНУТРИ [VOICE] НИКАКИХ ВОПРОСОВ. Только утверждения (чтобы не было вопросительной интонации).
+- ЗАПРЕЩЕНО использовать слово "приставы". Заменяй на "ФССП" или "исполнительное производство".
+- ЗАПРЕЩЕНО называть любые цифры.`;
 
 // Умная конвертация цифр для стабильного голоса
 function numberToWords(num) {
@@ -112,11 +112,11 @@ async function generateVoice(text) {
     } catch (e) { return null; }
 }
 
-// --- 5. ОСНОВНАЯ ЛОГИКА БОТА ---
+// --- 4. ОСНОВНАЯ ЛОГИКА БОТА ---
 bot.on('message', async (msg) => {
     const chatId = String(msg.chat.id);
     
-    // ВОЗВРАЩЕНО: Правильная обработка медиафайлов
+    // Перехват медиафайлов
     let text = msg.text;
     if (!text) {
         if (msg.photo) text = "[Фотография]";
@@ -128,8 +128,10 @@ bot.on('message', async (msg) => {
 
     try {
         const leadRef = doc(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'leads', chatId);
-        
-        // СИСТЕМНЫЕ КОМАНДЫ (Срабатывают сразу, пробивают любые баны)
+        const leadSnap = await getDoc(leadRef);
+        let leadData = leadSnap.exists() ? leadSnap.data() : null;
+
+        // СИСТЕМНЫЕ КОМАНДЫ (Пробивают бан и сбрасывают состояние)
         if (text.startsWith('/')) {
             if (text === '/start') {
                 await setDoc(leadRef, { 
@@ -139,7 +141,7 @@ bot.on('message', async (msg) => {
                     status: 'ai_active' 
                 }, { merge: true });
                 
-                const greeting = "Здравствуйте. Я Антон Старокоров, арбитражный управляющий. Уточните вашу общую сумму долга?";
+                const greeting = "Приветствую. Я Антон Старокоров, арбитражный управляющий. Уточните вашу общую сумму долга?";
                 bot.sendMessage(chatId, greeting);
                 
                 await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
@@ -151,7 +153,7 @@ bot.on('message', async (msg) => {
             }
             if (text === '/reset') {
                 await setDoc(leadRef, { resetAt: Date.now(), status: 'ai_active', updatedAt: Date.now() }, { merge: true });
-                bot.sendMessage(chatId, "Память ИИ очищена. Диалог начат с чистого листа.");
+                bot.sendMessage(chatId, "Кеш сброшен. Блокировки сняты. Диалог начат заново.");
                 await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), {
                     chatId: chatId, sender: 'ai', text: "🔄 [СИСТЕМА]: Кеш сброшен командой /reset", timestamp: Date.now()
                 });
@@ -159,8 +161,11 @@ bot.on('message', async (msg) => {
             return;
         }
 
-        const leadSnap = await getDoc(leadRef);
-        let leadData = leadSnap.exists() ? leadSnap.data() : null;
+        // ПРОВЕРКА БЛОКИРОВКИ (Отрабатывает только после проверки системных команд)
+        if (leadData?.status === 'closed') {
+            console.log(`[IGNORE] User ${chatId} is in CLOSED status.`);
+            return;
+        }
 
         // Если оператор ведет диалог из CRM - ИИ замолкает на 5 минут
         if (leadData?.status === 'operator_active' && (Date.now() - (leadData?.updatedAt || 0) < 5 * 60 * 1000)) {
@@ -171,11 +176,11 @@ bot.on('message', async (msg) => {
             return;
         }
 
-        // ПЕРЕХВАТ ТЕЛЕФОНА (Ищет любые форматы)
+        // ПЕРЕХВАТ ТЕЛЕФОНА
         const phoneMatch = text.match(/(?:\+?\d[\s\-()]?){10,14}/g);
         let phoneToSave = leadData?.phone || (phoneMatch ? phoneMatch[0] : null);
 
-        // Гарантированно записываем сообщение в CRM
+        // Записываем данные в CRM
         await setDoc(leadRef, { 
             name: msg.from.first_name || 'Клиент',
             username: msg.from.username || 'n/a',
@@ -204,10 +209,10 @@ bot.on('message', async (msg) => {
         // ФОРМИРУЕМ ФИНАЛЬНЫЙ ПРОМПТ
         let finalPrompt = BASE_PROMPT;
         if (dynamicInstructions) {
-            finalPrompt += `\n\nДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ:\n${dynamicInstructions}`;
+            finalPrompt += `\n\nДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ ОТ РУКОВОДИТЕЛЯ:\n${dynamicInstructions}`;
         }
         if (phoneToSave) {
-            finalPrompt += `\n\nСИСТЕМНОЕ СООБЩЕНИЕ: Телефон клиента УЖЕ ПОЛУЧЕН (${phoneToSave}). БОЛЬШЕ ЕГО НЕ ПРОСИ. Передавай дело юристу.`;
+            finalPrompt += `\n\nСИСТЕМНОЕ СООБЩЕНИЕ: Телефон клиента УЖЕ ПОЛУЧЕН (${phoneToSave}). БОЛЬШЕ ЕГО НЕ ПРОСИ. Просто скажи, что юрист свяжется.`;
         }
 
         let apiMessages = [{ role: "system", content: finalPrompt }];
@@ -219,6 +224,13 @@ bot.on('message', async (msg) => {
 
         const completion = await openai.chat.completions.create({ messages: apiMessages, model: "deepseek-chat" });
         const aiResponse = completion.choices[0].message.content;
+
+        // БЛОКИРОВКА ХАМОВ
+        if (aiResponse.includes("Диалог окончен.")) {
+            await updateDoc(leadRef, { status: 'closed' });
+            bot.sendMessage(chatId, "Диалог окончен.");
+            return;
+        }
 
         const parts = aiResponse.split('[VOICE]');
         const textPart = parts[0]?.trim();
@@ -243,7 +255,6 @@ bot.on('message', async (msg) => {
                     chatId: chatId, sender: 'ai', text: `🔊 [Голосовое сообщение]: ${voicePart}`, timestamp: Date.now() 
                 });
             } else {
-                // Страховка: если голос упал, отправляем текстом
                 const safeVoiceText = voicePart.replace(/\d+/g, '');
                 await bot.sendMessage(chatId, safeVoiceText);
                 await addDoc(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), { 
@@ -252,7 +263,7 @@ bot.on('message', async (msg) => {
             }
         }
 
-        // САММАРИ ДЛЯ CRM (Без галлюцинаций)
+        // САММАРИ ДЛЯ CRM
         try {
             const sumRes = await openai.chat.completions.create({
                 messages: [{ role: "user", content: `Сделай строгую выжимку фактов для юриста (сумма долга, активы, телефон: ${phoneToSave || 'нет'}) до 40 слов, БЕЗ ВЫДУМОК: ${text}` }],
@@ -264,7 +275,7 @@ bot.on('message', async (msg) => {
     } catch (err) { console.error("[CRITICAL BOT ERROR]:", err); }
 });
 
-// Слушатель: Если оператор пишет из CRM -> пересылаем в Telegram
+// Слушатель: Пересылка сообщений от оператора из CRM в Telegram
 onSnapshot(collection(db, 'artifacts', CRM_APP_ID, 'public', 'data', 'messages'), (snap) => {
     snap.docChanges().forEach(change => {
         if (change.type === 'added' && change.doc.data().sender === 'operator') {
