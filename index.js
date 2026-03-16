@@ -115,9 +115,13 @@ bot.on('message', async (msg) => {
                             source: searchParams.get('utm_source') || null,
                             medium: searchParams.get('utm_medium') || null,
                             campaign: searchParams.get('utm_campaign') || null,
+                            term: searchParams.get('utm_term') || null,
+                            content: searchParams.get('utm_content') || null,
                             raw: parts[1]
                         };
-                    } catch (e) {}
+                    } catch (e) {
+                        console.error("[UTM Parse Error]", e);
+                    }
                 }
                 
                 await setDoc(leadRef, { 
