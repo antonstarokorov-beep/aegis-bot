@@ -139,12 +139,34 @@ bot.on('message', async (msg) => {
         // --- СИСТЕМНЫЕ КОМАНДЫ (Пробивают бан и сбрасывают состояние) ---
         // Обрабатываем их В ПЕРВУЮ ОЧЕРЕДЬ, чтобы /reset сработал даже если пользователь в бане
         if (text.startsWith('/')) {
-            if (text === '/start') {
+            if (text.startsWith('/start')) {
+                // Парсим UTM-метки из параметра deep linking
+                let utmData = null;
+                const parts = text.split(' ');
+                if (parts.length > 1) {
+                    const paramString = parts[1];
+                    try {
+                        const searchParams = new URLSearchParams(paramString);
+                        utmData = {
+                            source: searchParams.get('utm_source') || null,
+                            medium: searchParams.get('utm_medium') || null,
+                            campaign: searchParams.get('utm_campaign') || null,
+                            term: searchParams.get('utm_term') || null,
+                            content: searchParams.get('utm_content') || null,
+                            raw: paramString // оригинал строки на всякий случай
+                        };
+                    } catch (e) {
+                        console.error("[UTM Parse Error]", e);
+                    }
+                }
+                
                 await setDoc(leadRef, { 
                     name: msg.from.first_name || 'Клиент', 
                     username: msg.from.username || 'n/a', 
                     updatedAt: Date.now(), 
-                    status: 'ai_active' 
+                    status: 'ai_active',
+                    utm_data: utmData,          // сохраняем UTM-метки
+                    firstSeenAt: Date.now()      // время первого контакта
                 }, { merge: true });
                 
                 const greeting = "Приветствую. Я Антон Старокоров, арбитражный управляющий. Уточните вашу общую сумму долга?";
