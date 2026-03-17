@@ -17,14 +17,15 @@ const botStartTime = Date.now();
 const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || 'aegis-leads-app'; 
 const tenantPath = `artifacts/${CRM_APP_ID}/users/${TENANT_ID}`;
 
-// --- ЭКСПРЕСС СЕРВЕР (Для Webhooks Envybox) ---
+// --- ЭКСПРЕСС СЕРВЕР ---
 const app = express();
-app.use(express.json()); // ВАЖНО: Разрешает серверу читать JSON из входящих вебхуков
+app.use(express.json());
 app.get('/', (req, res) => res.send('Aegis SaaS Omnichannel Engine: Online'));
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, '0.0.0.0', () => console.log(`[SYSTEM] Webhook server listening on port ${PORT}`));
 
 // --- ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
+// ПОКА ОСТАВЛЯЕМ LONG POLLING ДЛЯ ТЕСТА САММАРИ И ЭКСПОРТА
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 bot.on('polling_error', (error) => console.error(`[POLLING ERROR]: ${error.message}`));
 
@@ -61,9 +62,10 @@ function cleanTextForTTS(text) {
     return text.replace(/\?/g, '.').replace(/пристав[а-я]*/gi, 'сотрудники ФССП').replace(/\d{5,}/g, ' ').replace(/\b(15|10|20|30|5)\b/g, (m) => numberToWords(m)).replace(/\s+/g, ' ').trim();
 }
 
-async function generateVoice(text) {
-    const apiKey = process.env.ELEVENLABS_API_KEY;
-    const voiceId = process.env.ELEVENLABS_VOICE_ID;
+async function generateVoice(text, elevenKey) {
+    // Временно используем ключ из ENV, если его нет в БД (для обратной совместимости)
+    const apiKey = elevenKey || process.env.ELEVENLABS_API_KEY;
+    const voiceId = process.env.ELEVENLABS_VOICE_ID; // ИID голоса пока оставим жестким
     if (!apiKey || !voiceId) return null;
     try {
         const controller = new AbortController();
@@ -82,73 +84,7 @@ async function generateVoice(text) {
 }
 
 // ==========================================
-// БЛОК ИНТЕГРАЦИИ С ENVYBOX (ПО ДОКУМЕНТАЦИИ)
-// ==========================================
-
-// 1. Отправка ответа в виджет (Чат на сайте)
-async function sendToEnvyboxChat(clientId, text) {
-    const apiKey = process.env.ENVYBOX_API_KEY;
-    if (!apiKey) return;
-    try {
-        // TODO: Сверьте этот URL со спецификацией Envybox API
-        await fetch(`https://chat.envybox.io/api/v1/message/send`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-            body: JSON.stringify({ client_id: clientId, text: text })
-        });
-    } catch (e) { console.error("[ENVYBOX CHAT ERROR]:", e); }
-}
-
-// 2. Создание Лида в CRM (Экспорт)
-async function exportToEnvyboxCRM(leadData) {
-    const apiKey = process.env.ENVYBOX_API_KEY;
-    if (!apiKey) {
-        console.warn("[CRM EXPORT] ENVYBOX_API_KEY не найден в настройках Render!");
-        return false;
-    }
-    try {
-        // Данные формируются строго под требования Envybox
-        const payload = {
-            api_key: apiKey,
-            method: "create",
-            name: leadData.name || "Лид (AI-Агент)",
-            phone: leadData.phone,
-            comment: `🔥 Квалификация ИИ:\n${leadData.summary}\nИсточник: ${leadData.source === 'telegram' ? 'Telegram Bot' : 'Чат на сайте'}`
-            // pipeline_id: "12345" // Раскомментировать и вписать ID воронки из Envybox
-        };
-
-        const response = await fetch(`https://crm.envybox.io/api/v1/lead/create`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        return response.ok;
-    } catch (e) { 
-        console.error("[ENVYBOX CRM ERROR]:", e); 
-        return false;
-    }
-}
-
-// 3. Webhook (Прием входящих сообщений с сайта)
-app.post('/webhook/envybox', async (req, res) => {
-    // Отвечаем 200 OK, чтобы Envybox понял, что мы приняли запрос
-    res.status(200).send('OK');
-    
-    // ВАЖНО: Структура req.body зависит от вебхука Envybox.
-    // Если в документации поля называются иначе — измените их здесь.
-    const clientId = req.body.client_id || req.body.visitor_id; 
-    const text = req.body.message || req.body.text;
-    const name = req.body.name || 'Посетитель сайта';
-    
-    if (clientId && text) {
-        // Направляем сообщение в наше единое ИИ-ядро
-        await processAIConversation(clientId, text, 'envybox', { name: name, username: 'envy_visitor' });
-    }
-});
-
-
-// ==========================================
-// ЦЕНТРАЛЬНОЕ ИИ-ЯДРО (ОБРАБАТЫВАЕТ И ТГ, И САЙТ)
+// ЦЕНТРАЛЬНОЕ ИИ-ЯДРО
 // ==========================================
 async function processAIConversation(chatId, text, source, userInfo) {
     try {
@@ -156,7 +92,7 @@ async function processAIConversation(chatId, text, source, userInfo) {
         const leadSnap = await getDoc(leadRef);
         let leadData = leadSnap.exists() ? leadSnap.data() : null;
 
-        // ПАРСИНГ UTM МЕТОК (Сохранено и дополнено!)
+        // ПАРСИНГ UTM МЕТОК
         let utmData = leadData?.utm_data || null;
         if (text.startsWith('/start')) {
             const parts = text.split(' ');
@@ -181,7 +117,6 @@ async function processAIConversation(chatId, text, source, userInfo) {
             
             const greeting = "Здравствуйте. Каким вопросом я могу вам помочь?";
             if (source === 'telegram') bot.sendMessage(chatId, greeting);
-            else if (source === 'envybox') sendToEnvyboxChat(chatId, greeting);
             
             await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'user', text, timestamp: Date.now() });
             await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: greeting, timestamp: Date.now() + 1 });
@@ -206,7 +141,6 @@ async function processAIConversation(chatId, text, source, userInfo) {
         const phoneMatch = text.match(/(?:\+?\d[\s\-()]?){10,14}/g);
         let phoneToSave = leadData?.phone || (phoneMatch ? phoneMatch[0] : null);
 
-        // Обновляем данные клиента (ВАЖНО: сохраняем поле source)
         await setDoc(leadRef, { 
             name: userInfo.name, username: userInfo.username, phone: phoneToSave, 
             source: source, updatedAt: Date.now(), status: 'ai_active'
@@ -214,10 +148,15 @@ async function processAIConversation(chatId, text, source, userInfo) {
         
         await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'user', text, timestamp: Date.now() });
 
+        // ЧИТАЕМ НАСТРОЙКИ И КЛЮЧИ ИЗ БД КЛИЕНТА
         let dynamicInstructions = DEFAULT_PROMPT;
+        let integrationsData = {};
         try {
             const configSnap = await getDoc(doc(db, tenantPath, 'config', 'bot_settings'));
             if (configSnap.exists() && configSnap.data().instructions) dynamicInstructions = configSnap.data().instructions;
+            
+            const intSnap = await getDoc(doc(db, tenantPath, 'config', 'integrations'));
+            if (intSnap.exists()) integrationsData = intSnap.data();
         } catch(e) {}
 
         const allMsgsSnap = await getDocs(collection(db, tenantPath, 'messages'));
@@ -254,17 +193,15 @@ async function processAIConversation(chatId, text, source, userInfo) {
                 bot.sendChatAction(chatId, 'typing');
                 await new Promise(r => setTimeout(r, Math.min(Math.max(textPart.length * 50, 3000), 8000)));
                 await bot.sendMessage(chatId, textPart);
-            } else if (source === 'envybox') {
-                await sendToEnvyboxChat(chatId, textPart);
             }
             await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: textPart, timestamp: Date.now() });
         }
 
-        // ОТПРАВКА ГОЛОСА (В веб-чатах [VOICE] отправляется просто текстом)
+        // ОТПРАВКА ГОЛОСА
         if (voicePart) {
             if (source === 'telegram') {
                 bot.sendChatAction(chatId, 'record_voice');
-                const voiceBuffer = await generateVoice(voicePart);
+                const voiceBuffer = await generateVoice(voicePart, integrationsData.elevenlabs_api_key);
                 if (voiceBuffer) {
                     await bot.sendVoice(chatId, voiceBuffer);
                     await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: `🔊 [Голосовое сообщение]: ${voicePart}`, timestamp: Date.now() });
@@ -273,35 +210,56 @@ async function processAIConversation(chatId, text, source, userInfo) {
                     await bot.sendMessage(chatId, safeVoiceText);
                     await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: safeVoiceText, timestamp: Date.now() });
                 }
-            } else if (source === 'envybox') {
-                const safeVoiceText = voicePart.replace(/\d+/g, '');
-                await sendToEnvyboxChat(chatId, safeVoiceText);
-                await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: safeVoiceText, timestamp: Date.now() });
             }
         }
 
         // ==========================================
-        // МАГИЯ ЭКСПОРТА: Если получили номер телефона!
+        // МАГИЯ ЭКСПОРТА В ENVYBOX + ИДЕАЛЬНОЕ САММАРИ
         // ==========================================
         if (phoneToSave && !leadData?.crm_exported) {
             try {
-                // ИИ пишет выжимку для продажников
+                // 1. Формируем единый текст всей переписки для глубокого анализа
+                const fullHistoryText = chatHistory.map(m => `${m.sender === 'user' ? 'КЛИЕНТ' : 'АГЕНТ'}: ${m.text}`).join('\n');
+                
+                // 2. ИИ пишет идеальную выжимку фактов
                 const sumRes = await openai.chat.completions.create({
-                    messages: [{ role: "user", content: `Сделай строгую выжимку фактов для менеджера по продажам (потребности, запросы) до 40 слов, БЕЗ ВЫДУМОК: ${text}` }],
+                    messages: [{ 
+                        role: "user", 
+                        content: `Проанализируй диалог и сделай строгую выжимку фактов для юриста (сумма долга, активы, семья, потребности). Максимум 40 слов. БЕЗ ВЫДУМОК.\n\nДИАЛОГ:\n${fullHistoryText}` 
+                    }],
                     model: "deepseek-chat"
                 });
                 const summary = sumRes.choices[0].message.content;
                 
                 await updateDoc(leadRef, { summary: summary, crm_exported: true });
 
-                // Отправляем всё это добро в Envybox CRM
-                await exportToEnvyboxCRM({
-                    name: userInfo.name,
-                    phone: phoneToSave,
-                    summary: summary,
-                    source: source
-                });
-                console.log(`[SYSTEM] Лид ${phoneToSave} успешно отправлен в Envybox CRM!`);
+                // 3. Достаем ключ Envybox из БД и отправляем лид!
+                const envyboxApiKey = integrationsData.envybox_api_key;
+                
+                if (envyboxApiKey) {
+                    const payload = {
+                        api_key: envyboxApiKey,
+                        method: "create",
+                        name: userInfo.name || "Лид (AI-Агент)",
+                        phone: phoneToSave,
+                        comment: `🔥 Квалификация ИИ:\n${summary}\nИсточник: ${source === 'telegram' ? 'Telegram' : 'Сайт'}`
+                    };
+
+                    const response = await fetch(`https://crm.envybox.io/api/v1/lead/create`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    if (response.ok) {
+                        console.log(`[SYSTEM] Лид ${phoneToSave} успешно отправлен в Envybox CRM!`);
+                    } else {
+                        console.error("[ENVYBOX EXPORT ERROR]: Отклонено сервером", await response.text());
+                    }
+                } else {
+                    console.log(`[SYSTEM] Экспорт отменен: Ключ Envybox не настроен в CRM.`);
+                }
+
             } catch(e) { console.error("[Summary/Export Error]:", e); }
         }
 
@@ -330,15 +288,11 @@ onSnapshot(collection(db, tenantPath, 'messages'), async (snap) => {
     snap.docChanges().forEach(async change => {
         const msgData = change.doc.data();
         if (change.type === 'added' && msgData.sender === 'operator' && msgData.timestamp > botStartTime) {
-            
-            // Проверяем, откуда клиент, чтобы ответить ему туда же!
             const leadSnap = await getDoc(doc(db, tenantPath, 'leads', msgData.chatId));
             if (leadSnap.exists()) {
                 const source = leadSnap.data().source || 'telegram';
                 if (source === 'telegram') {
                     bot.sendMessage(msgData.chatId, msgData.text).catch(e => console.error(e));
-                } else if (source === 'envybox') {
-                    sendToEnvyboxChat(msgData.chatId, msgData.text);
                 }
             }
         }
