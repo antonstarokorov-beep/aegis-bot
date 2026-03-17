@@ -3,7 +3,7 @@ import TelegramBot from 'node-telegram-bot-api';
 import OpenAI from 'openai';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
-import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc, onSnapshot, getDocs } from 'firebase/firestore';
+import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc, onSnapshot, getDocs, deleteField } from 'firebase/firestore';
 import express from 'express';
 
 // --- ЗАЩИТА: ПРОВЕРКА TENANT_ID ---
@@ -17,15 +17,14 @@ const botStartTime = Date.now();
 const CRM_APP_ID = process.env.CRM_CUSTOM_APP_ID || 'aegis-leads-app'; 
 const tenantPath = `artifacts/${CRM_APP_ID}/users/${TENANT_ID}`;
 
-// --- ЭКСПРЕСС СЕРВЕР ---
+// --- ЭКСПРЕСС СЕРВЕР (Для приема вебхуков с сайтов в будущем) ---
 const app = express();
 app.use(express.json());
 app.get('/', (req, res) => res.send('Aegis SaaS Omnichannel Engine: Online'));
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, '0.0.0.0', () => console.log(`[SYSTEM] Webhook server listening on port ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`[SYSTEM] Server listening on port ${PORT}`));
 
 // --- ИНИЦИАЛИЗАЦИЯ СЕРВИСОВ ---
-// ПОКА ОСТАВЛЯЕМ LONG POLLING ДЛЯ ТЕСТА САММАРИ И ЭКСПОРТА
 const bot = new TelegramBot(process.env.TELEGRAM_BOT_TOKEN, { polling: true });
 bot.on('polling_error', (error) => console.error(`[POLLING ERROR]: ${error.message}`));
 
@@ -63,9 +62,8 @@ function cleanTextForTTS(text) {
 }
 
 async function generateVoice(text, elevenKey) {
-    // Временно используем ключ из ENV, если его нет в БД (для обратной совместимости)
     const apiKey = elevenKey || process.env.ELEVENLABS_API_KEY;
-    const voiceId = process.env.ELEVENLABS_VOICE_ID; // ИID голоса пока оставим жестким
+    const voiceId = process.env.ELEVENLABS_VOICE_ID; 
     if (!apiKey || !voiceId) return null;
     try {
         const controller = new AbortController();
@@ -84,7 +82,69 @@ async function generateVoice(text, elevenKey) {
 }
 
 // ==========================================
-// ЦЕНТРАЛЬНОЕ ИИ-ЯДРО
+// ИНТЕГРАЦИЯ С МЕССЕНДЖЕРОМ MAX (LONG POLLING)
+// ==========================================
+
+async function sendToMaxChat(chatId, text, maxToken) {
+    if (!maxToken) return;
+    try {
+        const url = `https://myteam.mail.ru/api/bot/v1/messages/sendText?token=${maxToken}&chatId=${chatId}&text=${encodeURIComponent(text)}`;
+        const response = await fetch(url);
+        if (!response.ok) console.error("[MAX SEND ERROR]:", await response.text());
+    } catch (e) { console.error("[MAX NETWORK ERROR]:", e); }
+}
+
+let activeMaxToken = null;
+let isMaxPolling = false;
+
+// Цикл постоянного опроса серверов VK Teams (MAX)
+async function pollMaxEvents() {
+    let lastEventId = 0;
+    console.log(`[SYSTEM] Запущен Long Polling для Мессенджера MAX`);
+    
+    while (isMaxPolling && activeMaxToken) {
+        try {
+            const url = `https://myteam.mail.ru/api/bot/v1/events/get?token=${activeMaxToken}&lastEventId=${lastEventId}&pollTime=30`;
+            const res = await fetch(url);
+            const data = await res.json();
+            
+            if (data.ok && data.events && data.events.length > 0) {
+                for (const event of data.events) {
+                    lastEventId = event.eventId;
+                    if (event.type === 'newMessage') {
+                        const chatId = String(event.payload.chat.userId);
+                        const text = event.payload.text;
+                        const name = event.payload.from.firstName || 'Клиент MAX';
+                        const username = event.payload.from.userId || 'n/a';
+                        
+                        await processAIConversation(chatId, text, 'max', { name, username });
+                    }
+                }
+            }
+        } catch (error) {
+            console.error("[MAX POLLING ERROR]:", error.message);
+            await new Promise(r => setTimeout(r, 5000)); // Пауза при ошибке сети
+        }
+    }
+}
+
+// Слушаем базу данных. Как только появляется токен MAX, запускаем его Polling
+onSnapshot(doc(db, tenantPath, 'config', 'integrations'), (docSnap) => {
+    if (docSnap.exists()) {
+        const data = docSnap.data();
+        if (data.max_token && data.max_token !== activeMaxToken) {
+            activeMaxToken = data.max_token;
+            if (!isMaxPolling) {
+                isMaxPolling = true;
+                pollMaxEvents(); // Запускаем цикл
+            }
+        }
+    }
+});
+
+
+// ==========================================
+// ЦЕНТРАЛЬНОЕ ИИ-ЯДРО (TG + MAX)
 // ==========================================
 async function processAIConversation(chatId, text, source, userInfo) {
     try {
@@ -107,7 +167,7 @@ async function processAIConversation(chatId, text, source, userInfo) {
                         content: searchParams.get('utm_content') || null,
                         raw: parts[1]
                     };
-                } catch (e) { console.error("[UTM Parse Error]", e); }
+                } catch (e) {}
             }
             
             await setDoc(leadRef, { 
@@ -116,17 +176,38 @@ async function processAIConversation(chatId, text, source, userInfo) {
             }, { merge: true });
             
             const greeting = "Здравствуйте. Каким вопросом я могу вам помочь?";
+            
+            let integrationsData = {};
+            const intSnap = await getDoc(doc(db, tenantPath, 'config', 'integrations'));
+            if (intSnap.exists()) integrationsData = intSnap.data();
+
             if (source === 'telegram') bot.sendMessage(chatId, greeting);
+            else if (source === 'max') sendToMaxChat(chatId, greeting, integrationsData.max_token);
             
             await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'user', text, timestamp: Date.now() });
             await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: greeting, timestamp: Date.now() + 1 });
             return;
         }
 
+        // НОВАЯ ЛОГИКА /reset (ПОЛНАЯ ОЧИСТКА ТЕЛЕФОНА И СТАТУСА CRM)
         if (text === '/reset') {
-            await setDoc(leadRef, { resetAt: Date.now(), status: 'ai_active', updatedAt: Date.now() }, { merge: true });
-            if (source === 'telegram') bot.sendMessage(chatId, "Кеш сброшен. Диалог начат заново.");
-            await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: "🔄 [СИСТЕМА]: Кеш сброшен", timestamp: Date.now() });
+            await setDoc(leadRef, { 
+                resetAt: Date.now(), 
+                status: 'ai_active', 
+                updatedAt: Date.now(),
+                phone: null,            // Удаляем номер телефона
+                crm_exported: false,    // Сбрасываем флаг экспорта
+                summary: null           // Очищаем старое саммари
+            }, { merge: true });
+            
+            let integrationsData = {};
+            const intSnap = await getDoc(doc(db, tenantPath, 'config', 'integrations'));
+            if (intSnap.exists()) integrationsData = intSnap.data();
+
+            if (source === 'telegram') bot.sendMessage(chatId, "Кеш полностью сброшен. Номер удален. Начинаем заново.");
+            else if (source === 'max') sendToMaxChat(chatId, "Кеш полностью сброшен. Номер удален. Начинаем заново.", integrationsData.max_token);
+            
+            await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: "🔄 [СИСТЕМА]: Кеш сброшен, лид обнулен", timestamp: Date.now() });
             return;
         }
 
@@ -139,6 +220,7 @@ async function processAIConversation(chatId, text, source, userInfo) {
 
         // ВЫТАСКИВАЕМ ТЕЛЕФОН
         const phoneMatch = text.match(/(?:\+?\d[\s\-()]?){10,14}/g);
+        // Если телефон уже есть в базе, не перезаписываем его. Иначе берем новый.
         let phoneToSave = leadData?.phone || (phoneMatch ? phoneMatch[0] : null);
 
         await setDoc(leadRef, { 
@@ -148,7 +230,7 @@ async function processAIConversation(chatId, text, source, userInfo) {
         
         await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'user', text, timestamp: Date.now() });
 
-        // ЧИТАЕМ НАСТРОЙКИ И КЛЮЧИ ИЗ БД КЛИЕНТА
+        // ЧИТАЕМ НАСТРОЙКИ И КЛЮЧИ ИЗ БД
         let dynamicInstructions = DEFAULT_PROMPT;
         let integrationsData = {};
         try {
@@ -178,6 +260,7 @@ async function processAIConversation(chatId, text, source, userInfo) {
         if (aiResponse.includes("Диалог окончен.")) {
             await updateDoc(leadRef, { status: 'closed' });
             if (source === 'telegram') bot.sendMessage(chatId, "Диалог окончен.");
+            else if (source === 'max') sendToMaxChat(chatId, "Диалог окончен.", integrationsData.max_token);
             return;
         }
 
@@ -193,6 +276,8 @@ async function processAIConversation(chatId, text, source, userInfo) {
                 bot.sendChatAction(chatId, 'typing');
                 await new Promise(r => setTimeout(r, Math.min(Math.max(textPart.length * 50, 3000), 8000)));
                 await bot.sendMessage(chatId, textPart);
+            } else if (source === 'max') {
+                await sendToMaxChat(chatId, textPart, integrationsData.max_token);
             }
             await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: textPart, timestamp: Date.now() });
         }
@@ -210,40 +295,48 @@ async function processAIConversation(chatId, text, source, userInfo) {
                     await bot.sendMessage(chatId, safeVoiceText);
                     await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: safeVoiceText, timestamp: Date.now() });
                 }
+            } else if (source === 'max') {
+                const safeVoiceText = voicePart.replace(/\d+/g, '');
+                await sendToMaxChat(chatId, safeVoiceText, integrationsData.max_token);
+                await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: safeVoiceText, timestamp: Date.now() });
             }
         }
 
         // ==========================================
-        // МАГИЯ ЭКСПОРТА В ENVYBOX + ИДЕАЛЬНОЕ САММАРИ
+        // ЭКСПОРТ В ENVYBOX CRM
         // ==========================================
+        
+        // ВАЖНО: Если мы только что получили телефон, И он еще не был экспортирован
         if (phoneToSave && !leadData?.crm_exported) {
             try {
-                // 1. Формируем единый текст всей переписки для глубокого анализа
+                console.log(`[SYSTEM] Начинаем анализ диалога для экспорта. Номер: ${phoneToSave}`);
+                
                 const fullHistoryText = chatHistory.map(m => `${m.sender === 'user' ? 'КЛИЕНТ' : 'АГЕНТ'}: ${m.text}`).join('\n');
                 
-                // 2. ИИ пишет идеальную выжимку фактов
                 const sumRes = await openai.chat.completions.create({
                     messages: [{ 
                         role: "user", 
-                        content: `Проанализируй диалог и сделай строгую выжимку фактов для юриста (сумма долга, активы, семья, потребности). Максимум 40 слов. БЕЗ ВЫДУМОК.\n\nДИАЛОГ:\n${fullHistoryText}` 
+                        content: `Проанализируй диалог и сделай строгую выжимку фактов (сумма долга, активы, потребности). Максимум 40 слов. БЕЗ ВЫДУМОК.\n\nДИАЛОГ:\n${fullHistoryText}` 
                     }],
                     model: "deepseek-chat"
                 });
                 const summary = sumRes.choices[0].message.content;
                 
+                // Ставим галочку "Экспортировано", чтобы больше не спамить API Envybox
                 await updateDoc(leadRef, { summary: summary, crm_exported: true });
 
-                // 3. Достаем ключ Envybox из БД и отправляем лид!
                 const envyboxApiKey = integrationsData.envybox_api_key;
                 
                 if (envyboxApiKey) {
                     const payload = {
                         api_key: envyboxApiKey,
                         method: "create",
-                        name: userInfo.name || "Лид (AI-Агент)",
+                        name: userInfo.name || "Лид (Aegis AI)",
                         phone: phoneToSave,
-                        comment: `🔥 Квалификация ИИ:\n${summary}\nИсточник: ${source === 'telegram' ? 'Telegram' : 'Сайт'}`
+                        comment: `🔥 Квалификация ИИ:\n${summary}\nИсточник: ${source}`
                     };
+
+                    console.log(`[ENVYBOX] Попытка экспорта лида. Данные:`, JSON.stringify(payload));
 
                     const response = await fetch(`https://crm.envybox.io/api/v1/lead/create`, {
                         method: 'POST',
@@ -251,10 +344,12 @@ async function processAIConversation(chatId, text, source, userInfo) {
                         body: JSON.stringify(payload)
                     });
                     
+                    const responseText = await response.text();
+                    
                     if (response.ok) {
-                        console.log(`[SYSTEM] Лид ${phoneToSave} успешно отправлен в Envybox CRM!`);
+                        console.log(`[ENVYBOX SUCCESS] Лид успешно отправлен! Ответ сервера:`, responseText);
                     } else {
-                        console.error("[ENVYBOX EXPORT ERROR]: Отклонено сервером", await response.text());
+                        console.error(`[ENVYBOX EXPORT FAILED] Статус: ${response.status}. Ответ сервера Envybox:`, responseText);
                     }
                 } else {
                     console.log(`[SYSTEM] Экспорт отменен: Ключ Envybox не настроен в CRM.`);
@@ -265,10 +360,6 @@ async function processAIConversation(chatId, text, source, userInfo) {
 
     } catch (err) { 
         console.error("[CRITICAL BOT ERROR]:", err); 
-        try {
-            await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: `⚠️ [ОШИБКА ИИ]: Сбой. Перехватите диалог.`, timestamp: Date.now() });
-            if (source === 'telegram') await bot.sendMessage(chatId, "Извините, возникла техническая заминка. Сейчас передам диалог специалисту.");
-        } catch (e) {}
     }
 }
 
@@ -288,11 +379,18 @@ onSnapshot(collection(db, tenantPath, 'messages'), async (snap) => {
     snap.docChanges().forEach(async change => {
         const msgData = change.doc.data();
         if (change.type === 'added' && msgData.sender === 'operator' && msgData.timestamp > botStartTime) {
+            
             const leadSnap = await getDoc(doc(db, tenantPath, 'leads', msgData.chatId));
             if (leadSnap.exists()) {
                 const source = leadSnap.data().source || 'telegram';
+                let integrationsData = {};
+                const intSnap = await getDoc(doc(db, tenantPath, 'config', 'integrations'));
+                if (intSnap.exists()) integrationsData = intSnap.data();
+
                 if (source === 'telegram') {
                     bot.sendMessage(msgData.chatId, msgData.text).catch(e => console.error(e));
+                } else if (source === 'max') {
+                    sendToMaxChat(msgData.chatId, msgData.text, integrationsData.max_token);
                 }
             }
         }
