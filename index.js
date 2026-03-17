@@ -6,6 +6,10 @@ import { getAuth, signInAnonymously } from 'firebase/auth';
 import { getFirestore, collection, addDoc, doc, setDoc, getDoc, updateDoc, onSnapshot, getDocs, deleteField } from 'firebase/firestore';
 import express from 'express';
 
+// --- ИГНОРИРОВАНИЕ ОШИБОК SSL ДЛЯ ENVYBOX ---
+// Сервер crm.envybox.io имеет проблему с сертификатами, отключаем строгую проверку TLS для нашего бота
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 // --- ЗАЩИТА: ПРОВЕРКА TENANT_ID ---
 const TENANT_ID = process.env.TENANT_ID;
 if (!TENANT_ID) {
@@ -88,7 +92,8 @@ async function generateVoice(text, elevenKey) {
 async function sendToMaxChat(chatId, text, maxToken) {
     if (!maxToken) return;
     try {
-        const url = `https://myteam.mail.ru/api/bot/v1/messages/sendText?token=${maxToken}&chatId=${chatId}&text=${encodeURIComponent(text)}`;
+        // ИСправлен URL (удалено ошибочное /api/)
+        const url = `https://myteam.mail.ru/bot/v1/messages/sendText?token=${maxToken}&chatId=${chatId}&text=${encodeURIComponent(text)}`;
         const response = await fetch(url);
         if (!response.ok) console.error("[MAX SEND ERROR]:", await response.text());
     } catch (e) { console.error("[MAX NETWORK ERROR]:", e); }
@@ -104,9 +109,26 @@ async function pollMaxEvents() {
     
     while (isMaxPolling && activeMaxToken) {
         try {
-            const url = `https://myteam.mail.ru/api/bot/v1/events/get?token=${activeMaxToken}&lastEventId=${lastEventId}&pollTime=30`;
+            // Исправлен URL (удалено ошибочное /api/)
+            const url = `https://myteam.mail.ru/bot/v1/events/get?token=${activeMaxToken}&lastEventId=${lastEventId}&pollTime=30`;
             const res = await fetch(url);
-            const data = await res.json();
+            
+            // Защита от падений и спама HTML страницами
+            if (!res.ok) {
+                console.error(`[MAX POLLING HTTP ERROR]: ${res.status}`);
+                await new Promise(r => setTimeout(r, 10000));
+                continue;
+            }
+
+            const textResponse = await res.text();
+            let data;
+            try {
+                data = JSON.parse(textResponse);
+            } catch (jsonErr) {
+                console.error("[MAX POLLING JSON ERROR]: Неверный формат ответа от сервера MAX. Ждем 10 сек...");
+                await new Promise(r => setTimeout(r, 10000));
+                continue;
+            }
             
             if (data.ok && data.events && data.events.length > 0) {
                 for (const event of data.events) {
@@ -122,7 +144,7 @@ async function pollMaxEvents() {
                 }
             }
         } catch (error) {
-            console.error("[MAX POLLING ERROR]:", error.message);
+            console.error("[MAX POLLING NETWORK ERROR]:", error.message);
             await new Promise(r => setTimeout(r, 5000)); // Пауза при ошибке сети
         }
     }
@@ -288,7 +310,8 @@ async function processAIConversation(chatId, text, source, userInfo) {
                 bot.sendChatAction(chatId, 'record_voice');
                 const voiceBuffer = await generateVoice(voicePart, integrationsData.elevenlabs_api_key);
                 if (voiceBuffer) {
-                    await bot.sendVoice(chatId, voiceBuffer);
+                    // Используем опции файла для предотвращения DeprecationWarning от node-telegram-bot-api
+                    await bot.sendVoice(chatId, voiceBuffer, {}, { filename: 'voice.mp3', contentType: 'audio/mpeg' });
                     await addDoc(collection(db, tenantPath, 'messages'), { chatId, sender: 'ai', text: `🔊 [Голосовое сообщение]: ${voicePart}`, timestamp: Date.now() });
                 } else {
                     const safeVoiceText = voicePart.replace(/\d+/g, '');
